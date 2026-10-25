@@ -1,0 +1,579 @@
+# 码上短剧
+
+微服务 + AI 短剧平台。0.1-0.4、2.1-2.6、**分布式事务与异步解耦（数据一致性）**、**RAG 内容推荐**、**首页多级缓存与 Java 21 虚拟线程**、**AI 伴看与结构化审核**模块已完成并验证；Vue 3 + Vite 前端已接入登录、首页（含继续观看）、详情、播放/解锁、互动、个人中心、充值中心、创作者工作台、审核台和 AI 伴看面板。剩余功能与分阶段计划见 [docs/roadmap.md](docs/roadmap.md)。
+
+## 技术基线
+
+- Java 21
+- Spring Boot 4.0.8
+- Spring Cloud 2025.1.3
+- Spring Cloud Alibaba 2025.1.0.0
+- Spring AI 2.0.1（DeepSeek 对话 / `qwen3.7-text-embedding-flash` / `qwen3.7-text-rerank` / Milvus + Elasticsearch 8）
+- Micrometer Tracing 1.6.7 + Brave（全链路追踪，上报 Zipkin）
+- MySQL 8.0.45（本机，业务库 `DL`，不容器化）
+- Redis 7.2.14 / Kafka 4.1.2（KRaft）在虚拟机 `192.168.33.129`
+- Nacos 3.1.1 / Milvus 2.6.4 / Elasticsearch 8.15.3 / xxl-job 3.5.0 / Sentinel Dashboard 1.8.9 / Zipkin 3.6.1 / Seata Server 2.5.0（Docker Compose，9 个容器）
+
+## 模块
+
+| 模块 | 端口 | 说明 |
+|---|---|---|
+| `msd-gateway` | 8000 | 统一网关，路由与前端静态托管 |
+| `msd-common` | - | 统一返回体、错误码、异常、常量 |
+| `msd-user` | 8101 | 用户与认证 |
+| `msd-drama` | 8102 | 短剧、剧集、分类、标签、搜索、创作者工作台、审核状态机与 AI 审核写回；Caffeine + Redis 多级缓存、布隆、xxl-job、虚拟线程 |
+| `msd-order` | 8103 | 充值下单、模拟支付、积分账户/流水、剧集解锁、已解锁列表 |
+| `msd-interaction` | 8104 | 点赞、收藏、评论、评论治理、观看历史、继续观看、outbox |
+| `msd-agent-service` | 8105 / 8106 | AI Agent / AgentScope Supervisor（8105，含 companion-agent）；audit A2A 服务（8106，`audit` profile） |
+| `msd-content-service` | 8107 | RAG 推荐、AI 伴看、分集摘要、结构化审核；Milvus + ES 混合检索、Rerank |
+
+> 冒烟模块 `msd-infra-smoke` 与原始 Nacos 示例 `msd-demo` 在 0.4 验证通过后已删除，仓库只保留生产代码。验证结论与可复用配置见 [docs/chapter-0-baseline.md](docs/chapter-0-baseline.md)。
+
+前端位于 `frontend/`（Vue 3 + Vite + JavaScript），开发端口 5173；生产构建由网关在 8000 托管。点开短剧进入红果式全屏 Feed，上下滑切换本剧剧集，右侧抖音式动态点赞/收藏、评论/分享，简介/选集/评论使用底部弹层。封面使用 CSS/SVG 渐变占位图，播放器为占位画面模拟播放并上报观看历史。
+
+## 前端
+
+```bash
+cd frontend
+npm install
+npm run dev      # http://127.0.0.1:5173，/api 代理到 8000
+npm run build    # 产物 frontend/dist
+```
+
+修改前端后需要重新 `npm run build` 并重新打包网关，静态文件才会更新：
+
+```bash
+mvn -B -pl msd-gateway -am package -DskipTests
+java -jar msd-gateway/target/msd-gateway-1.0.0-SNAPSHOT.jar
+```
+
+演示账号：`13800000003 / Msd@123456`（用户 1003，余额 250）。
+
+## 微服务启动
+
+```bash
+mvn -B -T 1C clean package -DskipTests
+
+# 业务服务（各开一个终端）
+java -jar msd-user/target/msd-user-1.0.0-SNAPSHOT.jar
+java -jar msd-drama/target/msd-drama-1.0.0-SNAPSHOT.jar
+java -jar msd-order/target/msd-order-1.0.0-SNAPSHOT.jar
+java -jar msd-interaction/target/msd-interaction-1.0.0-SNAPSHOT.jar
+java -jar msd-agent-service/target/msd-agent-service-1.0.0-SNAPSHOT.jar
+java -jar msd-content-service/target/msd-content-service-1.0.0-SNAPSHOT.jar
+
+# audit A2A 服务（可选，另开终端；8106）
+# NACOS_NAMESPACE 必须显式设置，否则 audit profile 会推导出不存在的 mashang-duanju-audit
+NACOS_NAMESPACE=mashang-duanju-dev java -jar msd-agent-service/target/msd-agent-service-1.0.0-SNAPSHOT.jar \
+  --spring.profiles.active=audit
+
+# 最后启动网关
+java -jar msd-gateway/target/msd-gateway-1.0.0-SNAPSHOT.jar
+```
+
+健康检查：`curl http://127.0.0.1:<port>/actuator/health`；网关路由验证：`curl http://127.0.0.1:8000/api/user/internal/ping`。
+
+## Nacos 配置与环境隔离
+
+- 命名空间：`mashang-duanju-dev` / `-test` / `-prod`，分组 `DEFAULT_GROUP`。
+- 初始化配置：`python scripts/init-nacos-config.py`（读取 `deploy/.env`）。
+- RAG 调优参数：`content-config.yaml`（`msd.ai.rag.*`），包含混合检索、Rerank、Milvus/ES 地址和超时。
+- 默认 `dev`；切换环境用 `SPRING_PROFILES_ACTIVE=test`，命名空间随之切换。
+- 热更新示例：`curl http://127.0.0.1:8105/internal/config/ai`，修改 Nacos 的 `agent-config.yaml` 后无需重启。
+- SCA 2025.1 不支持 `bootstrap.yml`，Nacos 配置统一走 `spring.config.import`。
+
+## 网关鉴权与跨域
+
+网关（8000）统一校验 JWT，并把用户信息透传给下游：
+
+- 请求头：`Authorization: Bearer <token>`
+- 透传头：`X-User-Id`、`X-User-Role`
+- 白名单：`/api/user/auth/**`、`/actuator/**`
+- 无 Token / 非法 Token / 过期 Token 返回 401
+
+### 登录注册
+
+登录注册由 `msd-user` 提供，经网关访问，不需要 Token：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/user/auth/register` | 手机号 + 密码 + 可选昵称，成功直接返回 Token |
+| POST | `/api/user/auth/login` | 手机号 + 密码登录 |
+| GET | `/api/user/internal/users/me` | 当前用户资料，需要 `Authorization: Bearer` |
+
+```bash
+# 种子账号：13800000003 / Msd@123456（追剧用户）
+LOGIN=$(curl -s -X POST http://127.0.0.1:8000/api/user/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"13800000003","password":"Msd@123456"}')
+TOKEN=$(printf '%s' "$LOGIN" | python -c "import sys,json;print(json.load(sys.stdin)['data']['token'])")
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8000/api/user/internal/users/me
+```
+
+- 种子账号：`13800000001`–`13800000013`，统一密码 `Msd@123456`；`13800000009` 是禁用账号，用于验证 403。
+- 密码以 BCrypt 校验，注册时只存哈希；接口响应不返回 `password_hash`。
+- 完整契约和错误码见 [docs/auth.md](docs/auth.md)。
+
+生成测试 Token（HS256，默认密钥与网关一致）：
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/user/internal/ping
+```
+
+生产环境通过 `MSD_JWT_SECRET` 覆盖默认密钥，至少 32 字节。CORS 开发环境允许所有来源，生产需改成具体域名。
+
+> 直连 8101-8107 会绕过网关鉴权，生产只暴露网关端口。
+
+## 短剧浏览接口
+
+首页和详情由 `msd-drama` 提供，经网关访问，需要登录：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/drama/internal/home` | 首页轮播、热播、最新、分类 |
+| GET | `/api/drama/internal/categories` | 启用中的分类列表 |
+| GET | `/api/drama/internal/search/dramas` | 搜索/分类浏览已上架短剧，分页返回 |
+| GET | `/api/drama/internal/dramas/{dramaId}` | 短剧详情和在线剧集 |
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/user/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"13800000003","password":"Msd@123456"}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['data']['token'])")
+
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/drama/internal/home
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/drama/internal/categories
+curl -G -H "Authorization: Bearer $TOKEN" --data-urlencode "keyword=总裁" \
+  http://127.0.0.1:8000/api/drama/internal/search/dramas
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/drama/internal/search/dramas?categoryId=2002&sort=hot"
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/drama/internal/dramas/5005
+```
+
+- 只返回已上架短剧（`deleted=0 AND review_status=2`）和在线剧集（`status=1`）；未上架或不存在统一 404。
+- 详情不返回视频地址，播放授权见 [docs/playback.md](docs/playback.md)。
+- 热度公式、字段说明和完整契约见 [docs/drama.md](docs/drama.md)。
+
+## 首页多级缓存与虚拟线程
+
+`msd-drama` 首页/详情使用 Caffeine L1 + Redis L2 多级缓存，详情和批量 ID 查询前置 Redisson 布隆过滤器，缓存 miss 用 `RLock` 单飞重建；写路径通过 `@MultiLevelCacheEvict` 和 `CacheEvictor` 做事务提交后延迟双删。
+
+- 首页 key `msd:drama:cache:home:v1`，L1 10s / L2 30s；详情 `msd:drama:cache:detail:{id}`，L1 30s / L2 300s。
+- 布隆使用版本化过滤器 + active 指针，启动缺失时自动重建；xxl-job `dramaCacheRebuildHandler` 每 5 分钟重建。
+- 新增 `msd-drama.yaml` 和 `03_xxl_job_drama.sql` 注册 `msd-drama-executor`；3.5 的执行器组 token 必须与 Nacos 配置一致。本地已验证 17:45 调度成功（`trigger_code=200`、`handle_code=200`）。
+- `spring.threads.virtual.enabled=true` 全局开启虚拟线程；dev 提供 `/internal-cache/demo/ai/single` 和 `/fanout`，对比虚拟线程与固定线程池。
+- 实测 100 次约 200ms 的下游调用：虚拟线程总耗时 226ms，固定池 8 为 2510ms。
+- Redisson 客户端由后台线程异步建连，Redis 不可用时请求快速降级，恢复后自动重连。
+- 已在虚拟线程下回归 Seata 解锁强制回滚：余额、解锁记录、drama 引用和计数均未变化。
+- 37 个 `msd-drama` 测试通过；设计、配置、xxl-job 注册和排障见 [docs/cache.md](docs/cache.md)。
+
+```bash
+# 缓存命中
+curl -s -o /dev/null -w "%{time_total}s\n" \
+  -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8102/internal/home
+
+# 虚拟线程 demo（仅 dev，直连 8102）
+curl "http://127.0.0.1:8102/internal-cache/demo/ai/single?prompt=hi"
+curl "http://127.0.0.1:8102/internal-cache/demo/ai/fanout?calls=100&mode=virtual&pool=8&prompt=hi"
+python scripts/load-test-ai.py --calls 200 --concurrency 100
+```
+
+## 剧集播放与积分解锁
+
+播放授权由 `msd-order` 提供，需要登录：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/order/internal/playback/episodes/{episodeId}` | 播放信息；未解锁时 `videoUrl=null` |
+| POST | `/api/order/internal/orders/episodes/{episodeId}/unlock` | 积分解锁 |
+| GET | `/api/order/internal/orders/points` | 积分余额 |
+| GET | `/api/order/internal/orders/dramas/{dramaId}/unlocks` | 某部短剧已解锁的付费集 |
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8000/api/order/internal/playback/episodes/6004
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8000/api/order/internal/orders/episodes/6004/unlock
+```
+
+- 免费集直接返回 `videoUrl`；付费集未解锁返回 200 + `unlocked=false` + `videoUrl=null`。
+- 解锁使用 Seata AT：扣积分、写流水、写 drama 解锁引用；并发重复解锁幂等。
+- drama 的网关路由已收窄为 `/api/drama/internal/**`，`/internal-source/**` 仅服务间直连。
+- 演示账号 `1003` 余额 250；新注册用户没有积分账户，只能看免费集。
+- 完整流程、错误码和验收记录见 [docs/playback.md](docs/playback.md)。
+
+## 互动与个人中心
+
+互动读接口和个人中心数据由 `msd-interaction` 提供，需要登录：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/interaction/internal/interactions/comments?dramaId=&episodeId=` | 根评论分页 |
+| GET | `/api/interaction/internal/interactions/comments/{rootId}/replies` | 回复分页 |
+| GET | `/api/interaction/internal/interactions/comments/mine` | 我的评论 |
+| GET | `/api/interaction/internal/interactions/favorites` | 我的收藏 |
+| GET | `/api/interaction/internal/interactions/history` | 观看历史 |
+| GET | `/api/interaction/internal/interactions/likes/dramas` | 点赞的短剧 |
+| GET | `/api/interaction/internal/interactions/stats` | 个人中心统计 |
+| GET | `/api/interaction/internal/interactions/dramas/{dramaId}/state` | 点赞/收藏状态 |
+| DELETE | `/api/interaction/internal/interactions/history/{episodeId}` | 删除单条历史 |
+| DELETE | `/api/interaction/internal/interactions/history` | 清空历史 |
+| PUT | `/api/user/internal/users/me` | 修改昵称/头像 URL/简介 |
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/interaction/internal/interactions/comments?dramaId=5001&episodeId=6001"
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8000/api/interaction/internal/interactions/stats
+```
+
+- 评论为两级结构：根评论分页 + 回复分页；删除根评论会级联删除回复。
+- 列表统一 `pageNo/pageSize`，默认 1/20、最大 100；标题/作者由 user/drama 批量接口补齐。
+- 个人中心由 user/order/interaction 三个服务组合，没有额外 BFF。
+- 完整契约见 [docs/interaction.md](docs/interaction.md) 和 [docs/personal-center.md](docs/personal-center.md)。
+
+## 服务间调用与负载均衡
+
+`msd-interaction` 通过 OpenFeign 调用 `msd-user` 的 `/internal/users/{id}`，用户数据来自 `t_user` 表。
+
+- 默认轮询：Spring Cloud LoadBalancer 的 `RoundRobinLoadBalancer`。
+- 切随机：启动互动服务时设置 `MSD_LB_STRATEGY=random`。
+- 响应中的 `instancePort` 表示实际命中的用户服务实例，便于验证。
+
+```bash
+# 两个用户实例注册到同一个 Nacos 服务名
+java -jar msd-user/target/msd-user-1.0.0-SNAPSHOT.jar
+SERVER_PORT=8111 java -jar msd-user/target/msd-user-1.0.0-SNAPSHOT.jar
+
+# 互动服务：默认轮询
+java -jar msd-interaction/target/msd-interaction-1.0.0-SNAPSHOT.jar
+# 随机策略
+MSD_LB_STRATEGY=random java -jar msd-interaction/target/msd-interaction-1.0.0-SNAPSHOT.jar
+
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8000/api/interaction/internal/users/1003/profile
+```
+
+服务间调用走内网，不经过网关鉴权；生产只暴露网关端口。
+
+## 构建
+
+```bash
+mvn -B -U -T 1C clean package -DskipTests
+```
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [docs/roadmap.md](docs/roadmap.md) | 剩余功能路线图：伴看前端、审核、充值、搜索、内容后台与生产化 |
+| [docs/architecture.svg](docs/architecture.svg) | 当前项目架构图（含 RAG、伴看与审核） |
+| [docs/runbook.md](docs/runbook.md) | 本地启动顺序、命令、排障 |
+| [docs/rag.md](docs/rag.md) | RAG 推荐架构、五段链路、API、配置与降级 |
+| [docs/recharge.md](docs/recharge.md) | 积分充值、模拟支付、订单幂等与积分流水 |
+| [docs/creator.md](docs/creator.md) | 创作者工作台、管理端审核、审核操作日志 |
+| [docs/moderation.md](docs/moderation.md) | 评论治理、首页继续观看、已解锁剧集 |
+| [docs/production.md](docs/production.md) | 生产化基础：CI、镜像模板、L1 广播与上线前检查 |
+| [docs/companion.md](docs/companion.md) | AI 伴看：摘要、前情检索、防剧透、会话记忆压缩 |
+| [docs/audit.md](docs/audit.md) | 结构化内容审核：JSON 契约、标签枚举、降级规则 |
+| [docs/auth.md](docs/auth.md) | 登录注册接口、错误码、JWT 约定 |
+| [docs/drama.md](docs/drama.md) | 首页推荐与短剧详情接口、热度规则 |
+| [docs/cache.md](docs/cache.md) | 多级缓存、布隆、击穿锁、延迟双删、xxl-job、虚拟线程 demo |
+| [docs/playback.md](docs/playback.md) | 剧集播放、积分解锁、观看历史上报 |
+| [docs/interaction.md](docs/interaction.md) | 点赞、收藏、评论、观看历史列表 |
+| [docs/personal-center.md](docs/personal-center.md) | 个人中心资料、统计与四个列表 |
+| [docs/frontend.md](docs/frontend.md) | Vue 前端路由、页面接口、占位播放器、构建与静态托管 |
+| [docs/schema.md](docs/schema.md) | 17 张核心业务表 + 一致性辅助表、枚举字典、事务与最终一致规则 |
+| [docs/chapter-0-baseline.md](docs/chapter-0-baseline.md) | 已验证的版本组合、应用配置、Rerank 契约 |
+| [docs/compatibility-matrix.md](docs/compatibility-matrix.md) | 兼容性矩阵与实测证据 |
+| [docs/smoke-report.md](docs/smoke-report.md) | 0.4 冒烟测试报告（历史记录） |
+
+## 0.1-0.4 验证结果
+
+| 能力 | 状态 |
+|---|---|
+| Nacos 配置拉取 / 服务注册 | PASS |
+| MySQL / MyBatis-Plus | PASS |
+| Redis / Redisson 锁 | PASS |
+| Milvus SDK | PASS |
+| Kafka 生产/消费 | PASS |
+| Spring AI DeepSeek 对话 | PASS |
+| 百炼 Embedding（1024 维） | PASS |
+| 百炼 Rerank | PASS |
+| xxl-job 执行器注册 / 触发 | PASS |
+| Swagger UI / OpenAPI 3.1 | PASS |
+
+## 中间件启动
+
+```bash
+# 1. 先确保虚拟机上的 Redis、Kafka 已启动
+# 2. 再起 9 个容器
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml ps   # 全部 healthy
+```
+
+## Sentinel Dashboard
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d sentinel-dashboard
+```
+
+- 控制台：`http://127.0.0.1:8858`，账号 `sentinel/sentinel`；只绑定本机。
+- 规则：Nacos 分组 `SENTINEL_GROUP`，dataId `sentinel-gateway-flow.json`、`sentinel-agent-degrade.json`。
+- 规则由 `python scripts/init-nacos-config.py` 发布；Dashboard 用于监控，手动改规则不会回写 Nacos。
+- 客户端的 `SENTINEL_CLIENT_IP` 用宿主机 IPv4（Docker Desktop 默认 `192.168.65.1`），不能用 `host.docker.internal`，Dashboard 会做 IP 校验。
+
+### 网关限流
+
+`msd-gateway` 对 6 条业务路由按客户端 IP 限流，默认 10 QPS/IP；`msd-content-service` 为 5 QPS/IP。规则在 Nacos `SENTINEL_GROUP/sentinel-gateway-flow.json`。
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+seq 1 30 | xargs -P 30 -I{} curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8000/api/interaction/internal/users/1003/profile | sort | uniq -c
+```
+
+- 超限返回 HTTP 429，body `{"code":42900,"message":"请求过于频繁","data":null,"success":false}`。
+- Dashboard 的网关流控页能看到 6 条规则和实时 QPS / 拒绝数。
+- 串行 `curl` 在 Windows 上通常达不到 10 QPS，要用并发波次触发。
+
+### AI 熔断降级
+
+`msd-agent-service` 的 `aiChat` 资源用 Sentinel 监控 Mock RAG + LLM 调用，规则在 Nacos `SENTINEL_GROUP/sentinel-agent-degrade.json`：
+
+- 慢调用比例：RT 超过 1000ms 且慢调用比例超过 50%，至少 5 次请求。
+- 异常比例：异常比例超过 50%，至少 5 次请求。
+- 熔断 10 秒后进入半开。
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/agent/internal/ai/chat?prompt=hi"
+```
+
+在 Nacos `agent-config.yaml` 调整 Mock LLM：
+
+```yaml
+msd:
+  ai:
+    mock:
+      delay-ms: 50      # 改 1500 触发慢调用熔断
+      error-rate: 0.0   # 改 1.0 触发异常熔断
+      rag-delay-ms: 120 # 模拟 RAG 检索耗时
+      rag-top-k: 3      # 模拟返回片段数
+```
+
+- 正常：`degraded=false`。
+- 熔断/异常：`degraded=true`，reply 为 `当前太火爆，请稍后再试`。
+- Dashboard 的熔断规则页可看到 `aiChat` 的两条规则。
+
+### AgentScope Supervisor
+
+`msd-agent-service` 同时提供基于 AgentScope Java 2.0 的 Supervisor，与上面的 Mock 熔断链路并存：
+
+- 新接口：`POST /api/agent/internal/ai/agent/chat`（直连 8105 为 `/internal/ai/agent/chat`），请求体 `{"message":"...","sessionId":"...","episodeId":6005}`；`episodeId` 可选，伴看问题需要传，`X-User-Id` 由网关 JWT 过滤器注入。
+- 主 Agent `supervisor` 读取 `.agentscope/workspace/AGENTS.md`，按路由规则调度 `social-agent`、`audit-agent`、`data-agent`、`companion-agent`。
+- 工具：`get_home_dramas`、`get_drama_detail`、`list_drama_episodes`，通过 Feign 查询 `msd-drama` 的只读内部接口；审核任务另有 `audit_remote` 远程 A2A 工具；伴看使用 `get_episode_summary`、`search_drama_context` 查询 content-service 的当前集摘要和前情，详见 [docs/companion.md](docs/companion.md)。
+- 会话状态存 Redis，key 前缀 `mashang:agent:session:`；Redis 连接复用 Nacos `common.yaml` 的 `spring.data.redis.*`。
+- 模型默认 `deepseek-flash`，可用 `msd.ai.agent.model` 或 `DEEPSEEK_AGENT_MODEL` 覆盖；必要时用 `DEEPSEEK_BASE_URL` 指向兼容网关。
+- 当前开发环境的兼容端点只接受 `deepseek-flash` / `deepseek-v4-pro`；若日志出现 `The supported API model names are ...`，用 `MSD_AI_AGENT_MODEL=deepseek-flash` 或 `--msd.ai.agent.model=deepseek-flash` 启动。
+- 缺少 `DEEPSEEK_API_KEY` 时 Supervisor Bean 不创建，新接口返回 `50300`，旧 `/internal/ai/chat` 不受影响。
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+curl -X POST "http://127.0.0.1:8000/api/agent/internal/ai/agent/chat" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"message":"查询短剧5001的详情并总结","sessionId":"demo-1"}'
+```
+
+- 首次调用会初始化模型、工作区和 Redis 状态存储，耗时会明显高于后续调用。
+- 复用同一个 `sessionId` 可继续同一段对话；响应会回传实际使用的 `sessionId`。
+- Supervisor 只启用只读业务工具，shell/web/文件/记忆工具已关闭。
+
+### A2A 审核服务（audit profile）
+
+`audit-agent` 还可以作为独立进程暴露为标准 A2A Endpoint，并注册到 Nacos AI Service。A2A 注册要求 Nacos 3.1+，本项目 Compose 使用 3.1.1。
+
+```bash
+# 8106：只加载 audit profile，不创建 Supervisor
+NACOS_NAMESPACE=mashang-duanju-dev java -jar msd-agent-service/target/msd-agent-service-1.0.0-SNAPSHOT.jar \
+  --spring.profiles.active=audit
+
+# AgentCard（公开发现信息）
+curl http://127.0.0.1:8106/.well-known/agent-card.json
+
+# 直连 Supervisor 的远程审核演示接口
+curl -X POST http://127.0.0.1:8105/internal/ai/agent/audit/remote \
+  -H "Content-Type: application/json" \
+  -d '{"content":"短剧标题：总裁的替身新娘","sessionId":"a2a-demo-1"}'
+```
+
+- A2A JSON-RPC Endpoint：`POST http://127.0.0.1:8106/`；AgentCard 名称 `audit-agent`，版本 `1.0.0`。
+- Nacos：命名空间 `mashang-duanju-dev`，控制台「AI 管理 → A2A 服务」可看到卡片和 JSON-RPC Endpoint。
+- Supervisor 侧通过 `NacosAgentCardResolver` 动态解析地址，每次调用新建 `A2aAgent`；单次超时 60s，仅对网络/超时/5xx/408/429 重试，最多 2 次，其他 4xx 直接降级。
+- 远程不可用时先做 3s 预检，通常 1s 内返回 `source=local-fallback, degraded=true`；工具级阻塞上限 90s，确保 Supervisor 在整体 120s 超时前拿到降级结果并改派本地 `audit-agent`。
+- A2A Endpoint 默认只监听本机、不带 JWT，适合内网演示；生产环境需要额外鉴权或专用 A2A 网关。
+
+## RAG 内容推荐
+
+`msd-content-service`（8107）实现短剧 RAG 推荐：查询改写 → Milvus 向量 + Elasticsearch BM25 并行检索 → RRF 融合 → DashScope Rerank → 基于检索资料的推荐理由。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/content/internal/ai/rag/recommend` | 经网关，需要登录；返回回答和最多 3 条来源 |
+| POST | `/internal/ai/rag/reindex` | 直连 8107；全量重建 Milvus/ES 索引 |
+| GET | `/internal/ai/rag/status` | 直连 8107；Milvus/ES 可用性和最近索引结果 |
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"有没有那种先婚后爱的甜宠剧","topK":3}'
+
+# 直连重建和状态
+curl -X POST http://127.0.0.1:8107/internal/ai/rag/reindex \
+  -H 'Content-Type: application/json' -d '{}'
+curl http://127.0.0.1:8107/internal/ai/rag/status
+```
+
+- 索引：Milvus collection `msd_drama_rag_v1`，ES index `msd_drama_bm25_v1`。
+- 检索：两路各 Top 20，RRF k=60；Rerank 精排 Top 3。
+- 降级标记：`rewrite`、`vector`、`bm25`、`rerank`、`generation`、`timeout`；推荐接口始终返回 200 和可读兜底文案。
+- `reindex`/`status` 不经网关，避免误操作。
+- Milvus 2.6.x 的 `common.storageType` 使用 `remote`；`minio` 已废弃，会导致写入 panic。
+- 完整架构、配置、验收和排障见 [docs/rag.md](docs/rag.md)。
+
+## 分布式链路追踪
+
+6 个服务统一使用 Micrometer Tracing + Brave，上报到 Zipkin。网关到下游用 W3C `traceparent` 透传，Feign 调用由 `feign-micrometer` 自动创建 client span。
+
+```bash
+# Zipkin 随 compose 启动，UI 只绑定本机
+docker compose -f deploy/docker-compose.yml up -d zipkin
+curl http://127.0.0.1:9411/health
+```
+
+- Zipkin UI：`http://127.0.0.1:9411`；内存存储，容器重启后 trace 丢失。
+- 公共配置在 Nacos `common.yaml`：采样率 dev `1.0` / test `0.5` / prod `0.1`，上报地址默认 `http://127.0.0.1:9411/api/v2/spans`。
+- Boot 4 的配置前缀是 `management.tracing.export.zipkin.*`，旧的 `management.zipkin.tracing.*` 不生效。
+- 网关和 Agent 开启 `spring.reactor.context-propagation=auto`，保证 WebFlux 和 `boundedElastic` 线程切换时 trace 不断。
+- Agent 的 AI 请求包含三层 span：`ai.chat` → `rag.retrieve` / `llm.generate`。
+
+验证完整链路：
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+
+# Gateway -> interaction -> agent
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/interaction/internal/ai/chat?prompt=hi"
+
+# Gateway -> interaction -> user（Feign）
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/interaction/internal/users/1003/profile"
+```
+
+第一条请求在 Zipkin 中应看到 8 个 span，且 traceId 相同：
+
+```text
+msd-gateway        http get                          (server)
+msd-gateway        http get                          (client)
+msd-interaction    http get /internal/ai/chat       (server)
+msd-interaction    http get                          (Feign client)
+msd-agent-service  http get /internal/ai/chat       (server)
+msd-agent-service  ai.chat
+msd-agent-service  rag.retrieve
+msd-agent-service  llm.generate
+```
+
+`rag.retrieve` 约 120ms、`llm.generate` 约 50ms，`ai.chat` 是两者的父 span。日志默认带 `[traceId,spanId]`，例如：
+
+```text
+[6ada1a7b5ea72824a2e652c4fe803e4e,0dfc3008205bf8d2] ...
+```
+
+Zipkin API：
+
+```bash
+curl http://127.0.0.1:9411/api/v2/services
+curl "http://127.0.0.1:9411/api/v2/traces?serviceName=msd-gateway&limit=5"
+```
+
+## 分布式事务与异步解耦
+
+### 积分解锁（Seata AT）
+
+`msd-order` 的 `UnlockFacade` 使用 `@GlobalTransactional`，把 order 本地事务（扣积分、写流水、写解锁记录）和 drama 分支事务（写解锁引用、`unlock_count + 1`）纳入同一个全局事务，任一步失败由 TC 回滚。
+
+- Seata Server 2.5.0，DB 存储，注册到 Nacos `mashang-duanju-dev` / `SEATA_GROUP`；客户端配置在 `common.yaml`。
+- 回滚验证开关：Nacos `msd-order.yaml` 的 `msd.tx.demo.fail-after-remote`，正常必须为 `false`。
+- order/drama 当前共用 `DL` 库，验证的是服务级全局事务，不是物理分库。
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8000/api/order/internal/orders/episodes/6004/unlock
+```
+
+### 互动计数（Outbox + Kafka）
+
+`msd-interaction` 在同一个本地事务里写互动明细和 `t_outbox_event`；`OutboxRelay` 每秒扫描待发送事件并投递 Kafka；`msd-drama` 的 `msd-drama-counter-v1` 消费组按 `event_id` 幂等更新短剧/剧集冗余计数。
+
+- 投递状态：`0` 待发送、`1` 已发送、`2` 死信。失败按 `min(2^retry, 60)` 秒退避，超过 `msd.outbox.max-retry` 转死信。
+- 消费幂等：`t_event_consume_log(consumer_group, event_id)` 唯一键拦截重复消息；消费日志和计数更新在同一个数据库事务内。
+- 失败处理：监听器重试 3 次（间隔 1 秒）后投递 `msd.interaction.dlq.v1`。
+- 最终一致：接口只等待明细和 outbox 落库，计数在 1-2 秒内异步更新；DLQ 或长期停机后用 `deploy/mysql/repair/rebuild_interaction_counts.sql` 对账。
+- 计数消费组首次启动从 latest 开始，避免重放历史事件。
+
+```bash
+# 查看 outbox 投递状态
+mysql -h127.0.0.1 -umsd -p -D DL -e \
+  "SELECT id,topic,event_key,status,retry_count,last_error FROM t_outbox_event ORDER BY id DESC LIMIT 5"
+
+# 查看消费组进度
+D:/kafka_2.13-4.1.2/bin/windows/kafka-consumer-groups.bat \
+  --bootstrap-server 192.168.33.129:9092 --describe --group msd-drama-counter-v1
+```
+
+## 数据库初始化
+
+```bash
+# 首次：建 DL / xxl_job 库和 msd 用户（需要 root）
+mysql -uroot -p < deploy/mysql/init/00_databases.sql
+
+# 业务表 + 种子数据（可重复执行）
+scripts\init-db.cmd
+```
+
+17 张核心业务表 + 一致性辅助表的设计与枚举见 [docs/schema.md](docs/schema.md)。种子账号 `13800000001`–`13800000013`（含管理员、创作者、普通用户和禁用账号），统一密码 `Msd@123456`（仅本地开发）。`04_mock_data.sql` 额外提供 13 部短剧、56 集剧集及订单、积分、评论、点赞、收藏、观看历史等模拟数据。
+
+## 端口
+
+| 组件 | 端口 | 位置 |
+|---|---|---|
+| Nacos 控制台 | 8080 | 容器 |
+| Nacos API/gRPC | 8848/9848/9849 | 容器 |
+| MySQL | 3306 | 本机服务 |
+| Redis | 6379 | 虚拟机 `192.168.33.129` |
+| Kafka | 9092 | 虚拟机 `192.168.33.129` |
+| Milvus | 19530/9091 | 容器 |
+| Elasticsearch | 9200 | 容器（只绑 `127.0.0.1`） |
+| MinIO | 9000/9001 | 容器 |
+| `msd-content-service` | 8107 | 本机服务 |
+| xxl-job-admin | 8088 | 容器 |
+| Sentinel Dashboard | 8858 | 容器（只绑 `127.0.0.1`） |
+| Zipkin | 9411 | 容器（只绑 `127.0.0.1`） |
+| Seata 控制台 | 9988 | 容器（容器内 9898，只绑 `127.0.0.1`） |
+| Seata TC | 8091 | 容器（业务服务通过 Nacos 发现后连接） |
+
+## 注意
+
+- 本地开发密码：MySQL `msd/msd_dev_2026`、Redis `msd-dev-redis`、xxl-job admin `admin/123456`；生产必须替换。
+- AI 免费模型：`qwen3.7-text-embedding-flash`（1024 维）、`qwen3.7-text-rerank`；对话使用 DeepSeek。
+- 真实 API Key 只放环境变量或 `deploy/.env`，不提交仓库。
+- 本机 Docker Hub 不可直连，镜像使用 `docker.1panel.live`。
+- Kafka 的 Windows 批处理依赖 `wmic`，请使用 `scripts/start-kafka.cmd`。

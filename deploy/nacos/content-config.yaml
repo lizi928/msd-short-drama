@@ -1,0 +1,94 @@
+# 码上短剧 RAG 内容推荐配置
+# 由 scripts/init-nacos-config.py 发布
+# namespace=mashang-duanju-{{ENV}}, group=DEFAULT_GROUP, dataId=content-config.yaml
+msd:
+  ai:
+    rag:
+      enabled: true
+      reindex-on-startup: false
+      total-timeout-ms: 75000
+      rewrite:
+        enabled: true
+        timeout-ms: 3000
+        failure-backoff-ms: 30000
+      vector:
+        enabled: true
+        top-k: 20
+        # DashScope embedding 单批最多 20 条
+        batch-size: 20
+        timeout-ms: 3000
+      bm25:
+        enabled: true
+        top-k: 20
+        timeout-ms: 2000
+        failure-backoff-ms: 15000
+      hybrid:
+        rrf-k: 60
+        top-k: 20
+      rerank:
+        enabled: true
+        top-n: 3
+        use-rewritten-query: false
+        url: "${DASHSCOPE_RERANK_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}"
+        model: ${DASHSCOPE_RERANK_MODEL:qwen3.7-text-rerank}
+        api-key: ${DASHSCOPE_API_KEY:}
+        timeout-ms: 3000
+        failure-backoff-ms: 30000
+      milvus:
+        host: ${MILVUS_HOST:127.0.0.1}
+        port: ${MILVUS_PORT:19530}
+        database-name: default
+        collection-name: msd_drama_rag_v1
+        embedding-dimension: 1024
+        index-type: IVF_FLAT
+        metric-type: COSINE
+        connect-timeout-ms: 2000
+        rpc-deadline-ms: 3000
+        failure-backoff-ms: 15000
+      elasticsearch:
+        base-url: "${ELASTICSEARCH_URL:http://127.0.0.1:9200}"
+        index-name: msd_drama_bm25_v1
+        connect-timeout-ms: 1000
+        read-timeout-ms: 2000
+      catalog:
+        page-size: 200
+        max-pages: 100
+      document:
+        max-description-chars: 1200
+        max-episode-titles: 30
+    # 结构化审核：严格 JSON + 标签枚举
+    audit:
+      enabled: true
+      timeout-ms: 10000
+      max-attempts: 2
+    # AI 伴看：分集摘要和轻量模型
+    companion:
+      enabled: true
+      summary:
+        max-chars: 120
+      context:
+        default-top-k: 3
+        max-top-k: 5
+        max-summary-chars: 200
+      memory:
+        # 最近 20 条约等于 10 轮
+        max-messages: 20
+        # 溢出消息攒够 4 条再压缩，避免单条消息生成摘要时模型编造
+        compression-batch: 4
+        max-archived-messages: 200
+        ttl-days: 7
+        max-summary-chars: 240
+        compress-message-chars: 300
+        lock-wait-ms: 200
+        lock-lease-ms: 10000
+      chat:
+        timeout-ms: 30000
+      light-model:
+        model: ${COMPANION_LIGHT_MODEL:qwen-flash}
+        temperature: 0.1
+        max-tokens: 256
+        timeout-ms: 4000
+        max-retries: 0
+        # 为空时复用 spring.ai.openai.base-url / api-key
+        base-url: ""
+        api-key: ""

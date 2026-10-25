@@ -1,0 +1,45 @@
+# 码上短剧 AI Agent 配置
+# 由 scripts/init-nacos-config.py 发布到 Nacos
+# namespace=mashang-duanju-{{ENV}}, group=DEFAULT_GROUP, dataId=agent-config.yaml
+msd:
+  ai:
+    temperature: {{AI_TEMPERATURE}}
+    model: ${DEEPSEEK_MODEL:deepseek-flash}
+    api-key: ${DEEPSEEK_API_KEY:}
+    mock:
+      delay-ms: 50
+      error-rate: 0.0
+      # 模拟 RAG 检索耗时和返回片段数；接真实 Milvus 后替换
+      rag-delay-ms: 120
+      rag-top-k: 3
+    # AgentScope Supervisor；缺少 API Key 时自动跳过相关 Bean，旧 Mock 接口仍可用
+    agent:
+      enabled: ${MSD_AGENT_ENABLED:true}
+      model: ${DEEPSEEK_AGENT_MODEL:deepseek-flash}
+      base-url: "${DEEPSEEK_BASE_URL:}"
+      workspace: ${AGENTSCOPE_WORKSPACE:.agentscope/workspace}
+      # 含冒号的值必须加引号，否则 YAML 解析失败
+      session-key-prefix: "mashang:agent:session:"
+      request-timeout: 120s
+    # A2A：audit 进程暴露 Endpoint，Supervisor 通过 Nacos 发现并调用
+    a2a:
+      audit:
+        name: audit-agent
+        host: ${MSD_A2A_AUDIT_HOST:127.0.0.1}
+        port: ${MSD_A2A_AUDIT_PORT:8106}
+        path: "/"
+        prompt-file: ${MSD_A2A_AUDIT_PROMPT:.agentscope/workspace/subagents/audit-agent.md}
+      nacos:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+        namespace: ${NACOS_NAMESPACE:mashang-duanju-dev}
+        username: ${NACOS_USERNAME:}
+        password: ${NACOS_PASSWORD:}
+      remote:
+        agent-name: audit-agent
+        request-timeout: 60s
+        max-retries: 2
+        # 工具级上限，短于 Supervisor 的 120s 请求超时
+        tool-timeout: 90s
+    embedding:
+      model: ${DASHSCOPE_EMBEDDING_MODEL:qwen3.7-text-embedding-flash}
+      api-key: ${DASHSCOPE_API_KEY:}
