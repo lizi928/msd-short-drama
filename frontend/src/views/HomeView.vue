@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { fetchPersonalized } from '../api/content'
 import { fetchHome } from '../api/drama'
 import { fetchContinueWatching } from '../api/interaction'
 import { useAuthStore } from '../stores/auth'
@@ -21,6 +22,7 @@ const loading = ref(true)
 const error = ref('')
 const activeCategory = ref(null)
 const continueItem = ref(null)
+const personalizedFeed = ref(null)
 
 const categories = computed(() => home.value?.categories || [])
 const sections = computed(() => home.value?.sections || [])
@@ -89,6 +91,18 @@ async function loadContinue() {
 }
 
 /**
+ * 加载首页个性化推荐，失败时静默隐藏。
+ */
+async function loadPersonalized() {
+    try {
+        const feed = await fetchPersonalized(6)
+        personalizedFeed.value = feed?.personalized && feed.items?.length ? feed : null
+    } catch {
+        personalizedFeed.value = null
+    }
+}
+
+/**
  * 从最近观看位置继续播放。
  */
 function resume(item) {
@@ -108,6 +122,7 @@ function resume(item) {
 onMounted(() => {
     load()
     loadContinue()
+    loadPersonalized()
 })
 </script>
 
@@ -133,7 +148,9 @@ onMounted(() => {
         </RouterLink>
 
         <template v-if="loading">
-            <SkeletonBlock height="196px" radius="20px"/>
+            <div class="home-hero">
+                <SkeletonBlock height="196px" radius="20px"/>
+            </div>
             <div class="skeleton-chips">
                 <SkeletonBlock width="58px" height="32px" radius="999px"/>
                 <SkeletonBlock width="70px" height="32px" radius="999px"/>
@@ -151,27 +168,47 @@ onMounted(() => {
         />
 
         <template v-else-if="home">
-            <BannerCarousel :banners="home.banners"/>
+            <div class="home-hero" :class="{ 'has-continue': continueItem }">
+                <BannerCarousel :banners="home.banners"/>
 
-            <button v-if="continueItem" class="continue-card" type="button" @click="resume(continueItem)">
-                <GradientCover
-                    class="continue-cover"
-                    :seed="continueItem.dramaId"
-                    :title="continueItem.dramaTitle"
-                    ratio="poster"
-                />
-                <span class="continue-copy">
-                    <span class="eyebrow">继续观看</span>
-                    <strong>{{ continueItem.dramaTitle || '短剧' }}</strong>
-                    <span class="continue-episode">
-                        第{{ continueItem.episodeNo || '?' }}集 · {{ continueItem.episodeTitle || '' }}
+                <button v-if="continueItem" class="continue-card" type="button" @click="resume(continueItem)">
+                    <GradientCover
+                        class="continue-cover"
+                        :seed="continueItem.dramaId"
+                        :title="continueItem.dramaTitle"
+                        :src="continueItem.dramaCoverUrl"
+                        ratio="poster"
+                    />
+                    <span class="continue-copy">
+                        <span class="eyebrow">继续观看</span>
+                        <strong>{{ continueItem.dramaTitle || '短剧' }}</strong>
+                        <span class="continue-episode">
+                            第{{ continueItem.episodeNo || '?' }}集 · {{ continueItem.episodeTitle || '' }}
+                        </span>
+                        <span class="continue-progress">
+                            看到 {{ formatMs(continueItem.positionMs) }}
+                        </span>
                     </span>
-                    <span class="continue-progress">
-                        看到 {{ formatMs(continueItem.positionMs) }}
-                    </span>
-                </span>
-                <span class="continue-arrow" aria-hidden="true">›</span>
-            </button>
+                    <span class="continue-arrow" aria-hidden="true">›</span>
+                </button>
+            </div>
+
+            <section
+                v-if="personalizedFeed && !activeCategory"
+                class="home-section personalized-section"
+            >
+                <div class="section-title">
+                    <h2>为你推荐</h2>
+                    <span>{{ personalizedFeed.items.length }} 部</span>
+                </div>
+                <div class="shelf">
+                    <DramaCard
+                        v-for="item in personalizedFeed.items"
+                        :key="item.dramaId"
+                        :drama="item"
+                    />
+                </div>
+            </section>
 
             <div v-if="categories.length" class="category-strip" aria-label="分类筛选">
                 <button
@@ -383,5 +420,94 @@ onMounted(() => {
     font-size: 11px;
     letter-spacing: 0.08em;
     text-align: center;
+}
+
+/* ---------- 桌面端（≥1024） ---------- */
+
+@media (min-width: 1024px) {
+    .home-main {
+        padding-top: 24px;
+    }
+
+    /* 搜索和头像已在顶部栏，首页不再重复 */
+    .search-entry,
+    .home-avatar {
+        display: none;
+    }
+
+    .home-hero {
+        display: grid;
+        gap: 16px;
+    }
+
+    .home-hero.has-continue {
+        grid-template-columns: minmax(0, 1.9fr) minmax(300px, 0.9fr);
+    }
+
+    /* 有继续观看时两列等高，Banner 拉伸填满行高 */
+    .home-hero.has-continue :deep(.banner),
+    .home-hero.has-continue .continue-card {
+        height: 100%;
+    }
+
+    .home-hero.has-continue :deep(.banner-slide),
+    .home-hero.has-continue :deep(.banner-slide .cover) {
+        height: 100%;
+        aspect-ratio: auto;
+    }
+
+    .home-hero.has-continue .continue-card {
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: center;
+        gap: 14px;
+        padding: 22px;
+    }
+
+    .home-hero.has-continue .continue-card .continue-cover {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+    }
+
+    .home-hero.has-continue .continue-card :deep(.cover-image) {
+        object-position: center 24%;
+    }
+
+    .home-hero.has-continue .continue-copy strong {
+        font-size: 17px;
+    }
+
+    .home-hero.has-continue .continue-arrow {
+        display: none;
+    }
+
+    .category-strip {
+        flex-wrap: wrap;
+        margin: 0;
+        padding: 0;
+        overflow: visible;
+    }
+
+    .home-section {
+        gap: 14px;
+    }
+
+    .shelf {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 18px 16px;
+        margin: 0;
+        padding: 0;
+        overflow: visible;
+        scroll-snap-type: none;
+    }
+
+    .shelf :deep(.drama-card) {
+        width: 100%;
+    }
+
+    .skeleton-shelf {
+        overflow: visible;
+    }
 }
 </style>

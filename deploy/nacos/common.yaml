@@ -4,6 +4,9 @@
 msd:
   env:
     name: "{{ENV}}"
+  security:
+    # 网关/Agent/Audit 服务间 token；为空时 dev fail-open，生产必须设置 MSD_INTERNAL_TOKEN
+    internal-token: ${MSD_INTERNAL_TOKEN:}
 
 spring:
   datasource:
@@ -12,7 +15,7 @@ spring:
     password: "{{MSD_DB_PASSWORD}}"
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: 5
+      maximum-pool-size: 10
       connection-timeout: 3000
       initialization-fail-timeout: -1
   data:

@@ -83,7 +83,7 @@ spring:
               uri: lb://msd-content-service
               predicates:
                 # 只暴露推荐和伴看聊天；reindex/status/tools 仅允许直连 8107
-                - Path=/api/content/internal/ai/rag/recommend,/api/content/internal/ai/companion/chat,/api/content/internal/ai/audit/dramas/**,/api/content/internal/ai/rag/reindex
+                - Path=/api/content/internal/ai/rag/recommend,/api/content/internal/ai/rag/personalized,/api/content/internal/ai/companion/chat,/api/content/internal/ai/audit/dramas/**,/api/content/internal/ai/rag/reindex
               filters:
                 - StripPrefix=2
 
@@ -129,6 +129,9 @@ msd:
     dev-token:
       enabled: false
       ttl-seconds: 7200
+  security:
+    # 网关向 Agent 注入的服务间 token；生产必须设置 MSD_INTERNAL_TOKEN
+    internal-token: ${MSD_INTERNAL_TOKEN:}
 
 management:
   endpoints:

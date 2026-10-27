@@ -127,7 +127,7 @@ JAVA_HOME=C:/Users/jun/.jdks/ms-21.0.11 \
   --bootstrap-server 192.168.33.129:9092 --list
 ```
 
-Topic 列表（3 分区、1 副本）：
+Topic 列表（6 分区、1 副本；`scripts/create-topics.cmd` 会把已有 3 分区扩到 6）：
 - `msd.infra.smoke.v1`
 - `msd.interaction.like.v1`
 - `msd.interaction.favorite.v1`
@@ -226,37 +226,49 @@ SELECT COUNT(*) FROM undo_log;
 ### 互动 Outbox、Kafka 消费与 DLQ
 
 ```bash
-# 1. outbox 投递状态：0 待发送、1 已发送、2 死信
+# 1. outbox 投递状态：0 待发送、1 已发送、2 死信；claim_token 为空表示已释放认领
 mysql -h127.0.0.1 -umsd -p -D DL -e \
-  "SELECT id,event_id,topic,event_key,status,retry_count,next_retry_time,last_error FROM t_outbox_event ORDER BY id DESC LIMIT 10"
+  "SELECT id,event_id,user_id,topic,event_key,status,retry_count,next_retry_time,claim_token,locked_until,last_error FROM t_outbox_event ORDER BY id DESC LIMIT 10"
 
-# 2. 查看 topic 消息
+# 2. 查看 topic 消息（本地 Kafka 可用 127.0.0.1:9092）
 D:/kafka_2.13-4.1.2/bin/windows/kafka-console-consumer.bat \
-  --bootstrap-server 192.168.33.129:9092 \
+  --bootstrap-server 127.0.0.1:9092 \
   --topic msd.interaction.like.v1 --from-beginning --max-messages 1
 
-# 3. 查看消费组进度和堆积
+# 3. 查看 drama / interaction 消费组进度和堆积
 D:/kafka_2.13-4.1.2/bin/windows/kafka-consumer-groups.bat \
-  --bootstrap-server 192.168.33.129:9092 --describe --group msd-drama-counter-v1
+  --bootstrap-server 127.0.0.1:9092 --describe --group msd-drama-counter-v1
+D:/kafka_2.13-4.1.2/bin/windows/kafka-consumer-groups.bat \
+  --bootstrap-server 127.0.0.1:9092 --describe --group msd-interaction-counter-v1
 
 # 4. 查看死信
 D:/kafka_2.13-4.1.2/bin/windows/kafka-console-consumer.bat \
-  --bootstrap-server 192.168.33.129:9092 \
+  --bootstrap-server 127.0.0.1:9092 \
   --topic msd.interaction.dlq.v1 --from-beginning --timeout-ms 5000
 
-# 5. 从明细重建计数
+# 5. P3 迁移：claim_token、client_request_id、user_id 和计数重算
+mysql -h127.0.0.1 -umsd -p -D DL < deploy/mysql/repair/20261027_interaction_async.sql
+
+# 6. 从明细重建计数和一致性对账
 mysql -h127.0.0.1 -umsd -p -D DL < deploy/mysql/repair/rebuild_interaction_counts.sql
+mysql -h127.0.0.1 -umsd -p -D DL < scripts/check-interaction-consistency.sql
+
+# 7. 互动写接口压测（专用用户 + 清理评论/点赞）
+python scripts/load-test-interaction.py --calls 2000 --concurrency 50 --target direct \
+  --user-id 9998 --cleanup-likes
 ```
 
-- 正常路径：调用互动接口后 1-2 秒内 outbox `status=1`，消费组 LAG 回到 0，`t_drama`/`t_drama_episode` 计数更新。
+- 正常路径：调用互动接口后 1-2 秒内 outbox `status=1`，两个消费组 LAG 回到 0，`t_drama`/`t_drama_episode`/`t_comment` 计数更新。
+- 压测脚本默认通过删除接口清理本轮创建的评论；`--cleanup-likes` 只对专用压测用户开启，避免删除真实用户点赞。2026-10-27 P4 实测：1999/2000 成功，0.05% 失败（死锁重试耗尽），p50/p95/p99=21/73/128ms。
+- Outbox 每秒短事务认领 200 条，8 线程并行发送，单条 1s 超时，租约 60s；发送失败按 2^retry 秒退避，`msd.outbox.max-retry` 默认 5，超过后 `status=2`。
 - Kafka 不可用时：outbox 保持 `status=0`、`retry_count` 递增、`next_retry_time` 按指数退避；恢复后自动补发。
-- `msd.outbox.max-retry` 默认 5，超过后 `status=2`，需要人工重放或跑重建 SQL。
-- 消费组首次启动从 latest 开始（`auto-offset-reset=latest`），历史消息不会重放。需要从最早开始排查时，先停 drama，再重置位点：
+- 新消费组 `msd-interaction-counter-v1` 必须使用 `auto.offset.reset=latest`，避免回放历史 LIKE/COMMENT。需要从最早开始排查时，先停对应服务，再重置位点：
   ```bash
   D:/kafka_2.13-4.1.2/bin/windows/kafka-consumer-groups.bat \
-    --bootstrap-server 192.168.33.129:9092 --group msd-drama-counter-v1 \
+    --bootstrap-server 127.0.0.1:9092 --group msd-drama-counter-v1 \
     --topic msd.interaction.like.v1 --reset-offsets --to-earliest --execute
   ```
+- 批量消费：`msd.interaction.batch-consumer.enabled=true` 后 drama 使用批量监听；默认 false。批量监听走独立 `batchKafkaListenerContainerFactory`（AckMode=BATCH），不能复用默认 RECORD 工厂，否则启动报 `Cannot use AckMode.RECORD with a batch listener`。非法消息通过 `BatchListenerFailedException` 定位单条，仍走 3 次重试 + DLQ。
 - 强杀 drama 后立即重启，旧成员要等 Kafka session timeout（默认 45 秒）才释放分区，期间会出现短暂 LAG，属于正常现象。
 
 ### Nacos 配置
@@ -273,7 +285,7 @@ mysql -h127.0.0.1 -umsd -p -D DL < deploy/mysql/repair/rebuild_interaction_count
 - **9848/9849 必须映射**，只开 8848 会导致应用侧 gRPC 连接失败。
 - 3.x 启动脚本强制要求 `NACOS_AUTH_TOKEN`（Base64 字符串），即使 `NACOS_AUTH_ENABLE=false` 也不能为空；已在 compose 中给本地默认值。
 - 命名空间：`mashang-duanju-dev` / `mashang-duanju-test` / `mashang-duanju-prod`，分组 `DEFAULT_GROUP`。
-- DataId：`common.yaml`（公共配置，含 `management.tracing.*` 和日志 traceId 格式）、`agent-config.yaml`（AI 配置，含 Mock LLM 和 Mock RAG 参数，仅 Agent 服务导入）、`content-config.yaml`（RAG 调优参数，仅 content service 导入）、`msd-drama.yaml`（首页缓存、布隆、xxl-job 与虚拟线程 demo 配置）、`msd-order.yaml`（订单服务配置，含 `msd.tx.demo.fail-after-remote` 回滚验证开关，默认 false）。
+- DataId：`common.yaml`（公共配置，含连接池 10、`management.tracing.*` 和日志 traceId 格式）、`agent-config.yaml`（AI 配置，含 Mock LLM 和 Mock RAG 参数，仅 Agent 服务导入）、`content-config.yaml`（RAG 调优参数，仅 content service 导入）、`msd-drama.yaml`（首页缓存、布隆、xxl-job、连接池 20 与批量消费开关）、`msd-interaction.yaml`（连接池 20、虚拟线程、outbox、评论缓存和异步计数）、`msd-order.yaml`（订单服务配置，含 `msd.tx.demo.fail-after-remote` 回滚验证开关，默认 false）。
 - Sentinel 规则 DataId：`sentinel-gateway-flow.json`、`sentinel-agent-degrade.json`，分组 `SENTINEL_GROUP`。
 - 初始化/覆盖配置：
   ```bash
@@ -320,10 +332,25 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8000/api/drama/internal/search/dramas?categoryId=2002&sort=hot"
 ```
 
-- 默认搜索 `total=9`；`categoryId=2002&sort=hot` 返回 5004、5001。
+- 未导入真实测试数据时默认搜索 `total=9`，导入后为 18；`categoryId=2002&sort=hot` 会优先返回新增的甜宠剧。
 - `keyword=%` 返回 `total=0`，通配符已转义；`pageSize=999` 按 50 截断。
 - 前端入口 `/search`，首页头部搜索框跳转。
 - 中文参数直接在 GBK 终端用 `curl` 可能得到 400（URL 解码失败），用 Python 生成百分号编码；`sort` 非 latest/hot、关键词超过 50 字或 `categoryId<=0` 返回 400。
+
+### AI 短剧测试数据
+
+`deploy/mysql/seed/ai_drama_test.sql` 提供 9 部 AI 短剧（5101-5109）和 54 集（7101-7154），媒体来自 B 站公开视频，存放于本地 MinIO。
+
+```bash
+mysql -umsd -p -h127.0.0.1 --default-character-set=utf8mb4 \
+  < deploy/mysql/seed/ai_drama_test.sql
+
+# 导入后等待 xxl-job 每 5 分钟重建布隆，或在控制台手动触发“短剧缓存重建”
+grep "bloom rebuild completed" logs/msd-drama.log | tail -1
+```
+
+- 导入后搜索接口立即可用；详情需要布隆重建后才会返回，之前可能 404。
+- 来源、数据适配、验证和清理见 [test-data.md](test-data.md)。
 
 ### 首页多级缓存
 
@@ -568,12 +595,18 @@ done
 - 进程环境有 `DEEPSEEK_API_KEY`（Nacos `msd.ai.api-key` 会引用它）。
 - Redis `192.168.33.129:6379` 可达，密码来自 `deploy/.env` / Nacos `common.yaml`。
 - 服务从仓库根启动，否则 `.agentscope/workspace` 解析不到。
+- 生产设置 `MSD_INTERNAL_TOKEN`，网关自动剥离客户端伪造值后注入 `X-Internal-Token`；本地为空时 fail-open。
 
 ```bash
 # 直连 Agent 服务
 curl -X POST http://127.0.0.1:8105/internal/ai/agent/chat \
   -H "Content-Type: application/json" -H "X-User-Id: 1003" \
   -d '{"message":"查询短剧5001的详情并总结","sessionId":"runbook-agent-1"}'
+
+# 只验证规则路由，不调用模型
+curl -X POST http://127.0.0.1:8105/internal/ai/agent/route \
+  -H "Content-Type: application/json" -H "X-User-Id: 1003" \
+  -d '{"message":"第3集里他们为什么吵架","sessionId":"runbook-route-1"}'
 
 # 检查 Redis 会话 key（密码从 deploy/.env 读取，不打印）
 set -a; . deploy/.env; set +a
@@ -755,7 +788,7 @@ npm run build    # 产物 frontend/dist
 - 网关在 Maven `process-resources` 阶段把 `frontend/dist` 复制到静态资源。
 - 修改前端后必须重新构建前端并重新打包网关；只重启网关不会更新页面。
 - 深链 `/drama/5001`、`/me/favorites` 由 `SpaWebFilter` 回退到 `index.html`。
-- 封面不请求 MinIO，播放器不加载 `videoUrl`，这是设计行为，不是破图或播放失败。
+- 封面会请求 MinIO 上的海报（`msd/covers/ai/*.jpg`），失败自动回退渐变；播放器通过 `videoUrl` 加载 `msd/videos/ai/*.mp4`，视频缺失时会回退封面并保留控制条，不视为页面故障。
 - 点开短剧进入全屏 Feed；上下滑动切集，简介/选集/评论在底部弹层，`/watch/:episodeId` 为旧入口兼容。
 - Feed 内会锁定 body 滚动，离开页面自动恢复；带弹层离开若发现页面不能滚动，优先检查是否残留 `body.style.overflow=hidden`。
 - Token 存在 `localStorage.msd.auth`；接口 401 会清理会话并跳登录。
@@ -784,7 +817,7 @@ docker compose -f deploy/docker-compose.yml down
 | 前端 5173 页面空白或接口 404 | 确认网关 8000 和对应业务服务已启动；`/api` 走 Vite 代理 |
 | 网关 8000 打开仍是旧页面 | 重新 `npm run build`，再打包并重启网关 |
 | 直接刷新 `/drama/5001` 返回 404 | 确认打包前 `frontend/dist` 存在，网关 `SpaWebFilter` 生效 |
-| 封面没有真实图片、播放器没有视频 | 设计如此：渐变封面 + 占位播放器，不访问 MinIO |
+| 封面显示渐变、播放器没有视频 | 封面请求 MinIO 失败会回退渐变（检查 9000 端口和桶策略）；播放器仍是占位实现，不读 `videoUrl` |
 | 全屏 Feed 上下滑不动 | 确认手指落在 `.feed-scroller` 内；弹层打开时背景被锁定，先关闭弹层 |
 | 从 Feed 返回后页面不能滚动 | 检查 `body.style.overflow` 是否残留 `hidden`；Feed/AppModal 使用引用计数锁，重启页面可恢复 |
 | `/watch/:episodeId` 与 Feed 显示不一致 | `/watch` 只解析 episode→dramaId，之后复用同一 Feed；检查 playback 是否返回正确 dramaId |
@@ -831,6 +864,11 @@ docker compose -f deploy/docker-compose.yml down
 | 网关 429 不生效 | 确认 Nacos `SENTINEL_GROUP` 规则已加载、压测是并发波次、`SENTINEL_CLIENT_IP` 是合法 IPv4 |
 | AI 熔断不触发 | 确认 `delay-ms > 1000`、10 秒内至少 5 次请求、Nacos degrade 规则已加载；启动日志应有 `Resolved method [blockHandler]` |
 | Agent 接口返回 50300 | 进程没有 `DEEPSEEK_API_KEY`，或模型/Redis/工作区初始化失败；查 `logs/msd-agent-service.log` 的 `AgentScope initialization failed` |
+| Agent 直连 401 `缺少或非法内部令牌` | 生产已开启 `MSD_INTERNAL_TOKEN`；直连时带 `X-Internal-Token`，经网关访问由 JWT 过滤器自动注入 |
+| Agent 提示 `工具调用被拒绝` | 工具不在 `msd.ai.agent.tools.allow`，或 ID/分页/文本长度超过沙箱限制；看 `agent.tool.audit` 的 outcome |
+| Agent 400 `指令注入` | PromptGuard 命中指令覆盖/套取系统提示；这是预期安全拦截，不是模型故障 |
+| 路由总是 SUPERVISOR | 检查 Nacos `agent-config.yaml` 的 `routing.rules`、规则版本和关键词；直接调 `/internal/ai/agent/route` 验证 |
+| Redis 不可用时路由报错 | 路由缓存应 fail-open；确认 `RouteCache` 版本已更新，首请求约 0.5s，30s 内后续请求直接跳过 Redis |
 | Agent 首次调用超时 | 首次会初始化模型、工作区和 Redisson；确认 `msd.ai.agent.request-timeout`、Redis 可达、模型端点正常 |
 | Agent 工具报短剧服务异常 | 确认 `msd-drama` 已注册到 Nacos，`/internal/home`、`/internal/dramas/{id}` 可直连访问 |
 | Agent 不调用子 Agent | 检查 `.agentscope/workspace/subagents/*.md` 的 `description` 和 `tools`；工具名必须与 `AgentScope tools registered` 日志一致 |

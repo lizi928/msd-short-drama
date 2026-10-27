@@ -35,6 +35,9 @@ spring:
           msd-drama:
             connect-timeout: 2000
             read-timeout: 15000
+          msd-interaction:
+            connect-timeout: 500
+            read-timeout: 800
   ai:
     model:
       chat: deepseek

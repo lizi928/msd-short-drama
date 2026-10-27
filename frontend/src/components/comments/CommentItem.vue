@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { likeTarget, unlikeTarget } from '../../api/interaction'
+import { useInteractionAck } from '../../composables/useInteractionAck'
 import { useAuthStore } from '../../stores/auth'
 import { useToastStore } from '../../stores/toast'
 import { formatRelative } from '../../utils/format'
@@ -22,6 +23,8 @@ defineEmits(['reply', 'delete'])
 const auth = useAuthStore()
 const toast = useToastStore()
 const pendingLike = ref(false)
+const ackId = ref('')
+const ack = useInteractionAck()
 
 const displayName = computed(() => props.comment.nickname || '匿名剧迷')
 const canDelete = computed(() => (
@@ -45,6 +48,23 @@ async function toggleLike() {
             ? await unlikeTarget(3, props.comment.commentId)
             : await likeTarget(3, props.comment.commentId)
         props.comment.liked = result.active
+        if (result.eventId) {
+            ackId.value = result.eventId
+            ack.track(result.eventId, {
+                onDead: () => {
+                    if (ackId.value !== result.eventId) {
+                        return
+                    }
+                    ackId.value = ''
+                    props.comment.liked = previous
+                    props.comment.likeCount = Math.max(
+                        0,
+                        Number(props.comment.likeCount || 0) + (previous ? 1 : -1)
+                    )
+                    toast.push('点赞同步失败，已恢复状态')
+                }
+            })
+        }
     } catch (cause) {
         props.comment.liked = previous
         props.comment.likeCount = Math.max(

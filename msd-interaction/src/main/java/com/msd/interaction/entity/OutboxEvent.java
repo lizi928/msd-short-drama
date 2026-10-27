@@ -17,6 +17,8 @@ public class OutboxEvent {
     private Long id;
     // 事件 UUID，消费端幂等键
     private String eventId;
+    // 触发事件的用户 ID，用于事件归属校验
+    private Long userId;
     // Kafka Topic
     private String topic;
     // 事件类型：LIKE/FAVORITE/COMMENT/HISTORY/DRAMA_CHANGED/AI_REVIEW_REQUEST
@@ -72,6 +74,20 @@ public class OutboxEvent {
      */
     public void setEventId(String eventId) {
         this.eventId = eventId;
+    }
+
+    /**
+     * 获取事件归属用户。
+     */
+    public Long getUserId() {
+        return userId;
+    }
+
+    /**
+     * 设置事件归属用户。
+     */
+    public void setUserId(Long userId) {
+        this.userId = userId;
     }
 
     /**

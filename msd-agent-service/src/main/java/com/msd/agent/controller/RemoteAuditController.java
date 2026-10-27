@@ -2,6 +2,7 @@ package com.msd.agent.controller;
 
 import com.msd.agent.dto.RemoteAuditReply;
 import com.msd.agent.dto.RemoteAuditRequest;
+import com.msd.agent.routing.PromptGuard;
 import com.msd.agent.service.RemoteAuditService;
 import com.msd.common.constant.CommonConstants;
 import com.msd.common.result.Result;
@@ -9,6 +10,8 @@ import com.msd.common.result.ResultCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -42,12 +45,16 @@ public class RemoteAuditController {
 
     // 远程审核服务（A2A 调用、重试与降级）
     private final RemoteAuditService remoteAuditService;
+    // 待审核文本 Prompt 防护
+    private final PromptGuard promptGuard;
 
     /**
-     * 注入远程审核服务。
+     * 注入远程审核服务和 Prompt 防护。
      */
-    public RemoteAuditController(RemoteAuditService remoteAuditService) {
+    public RemoteAuditController(RemoteAuditService remoteAuditService,
+            PromptGuard promptGuard) {
         this.remoteAuditService = remoteAuditService;
+        this.promptGuard = promptGuard;
     }
 
     /**
@@ -56,7 +63,8 @@ public class RemoteAuditController {
     @PostMapping("/remote")
     public Mono<Result<RemoteAuditReply>> auditRemote(
             @RequestHeader(value = CommonConstants.HEADER_USER_ID, required = false) String userId,
-            @RequestBody(required = false) RemoteAuditRequest request) {
+            @RequestBody(required = false) RemoteAuditRequest request,
+            ServerHttpResponse response) {
         // 1. 校验待审核内容
         if (request == null || !StringUtils.hasText(request.content())) {
             return Mono.just(Result.fail(
@@ -68,7 +76,22 @@ public class RemoteAuditController {
                     "content 不能超过 " + MAX_CONTENT_LENGTH + " 字"));
         }
 
-        // 2. 会话 ID 为空则生成；直连接口不依赖网关注入的 userId
+        // 2. 审核内容同样不可信，清洗内部标记并拦截指令注入
+        PromptGuard.CheckResult guardResult = promptGuard.inspect(content);
+        if (guardResult.rejected()) {
+            log.warn("Audit prompt rejected: userId={}, markers={}",
+                    userId, guardResult.removedMarkers());
+            response.setStatusCode(HttpStatus.BAD_REQUEST);
+            return Mono.just(Result.fail(ResultCode.PARAM_ERROR.getCode(),
+                    guardResult.reason()));
+        }
+        String safeContent = guardResult.text();
+        if (!StringUtils.hasText(safeContent)) {
+            return Mono.just(Result.fail(ResultCode.PARAM_ERROR.getCode(),
+                    "content 清洗后不能为空"));
+        }
+
+        // 3. 会话 ID 为空则生成；直连接口不依赖网关注入的 userId
         String sessionId = StringUtils.hasText(request.sessionId())
                 ? request.sessionId().trim()
                 : UUID.randomUUID().toString();
@@ -78,8 +101,8 @@ public class RemoteAuditController {
         }
         String resolvedUserId = StringUtils.hasText(userId) ? userId : "system";
 
-        // 3. RemoteAuditService 内部已做重试和降级，这里只做统一包装
-        return remoteAuditService.audit(content, resolvedUserId, sessionId)
+        // 4. RemoteAuditService 内部已做重试和降级，这里只做统一包装
+        return remoteAuditService.audit(safeContent, resolvedUserId, sessionId)
                 .map(Result::ok)
                 .onErrorResume(ex -> {
                     log.error("Remote audit endpoint failed: sessionId={}", sessionId, ex);

@@ -37,6 +37,10 @@ public class RagProperties {
     private Catalog catalog = new Catalog();
     // 索引文档裁剪配置
     private DocumentOptions document = new DocumentOptions();
+    // 多查询扩展配置
+    private Expansion expansion = new Expansion();
+    // 用户偏好个性化配置
+    private Personalization personalization = new Personalization();
 
     /** 是否启用 RAG 链路。 */
     public boolean isEnabled() {
@@ -156,6 +160,26 @@ public class RagProperties {
     /** 设置索引文档裁剪配置。 */
     public void setDocument(DocumentOptions document) {
         this.document = document;
+    }
+
+    /** 多查询扩展配置。 */
+    public Expansion getExpansion() {
+        return expansion;
+    }
+
+    /** 设置多查询扩展配置。 */
+    public void setExpansion(Expansion expansion) {
+        this.expansion = expansion;
+    }
+
+    /** 用户偏好个性化配置。 */
+    public Personalization getPersonalization() {
+        return personalization;
+    }
+
+    /** 设置用户偏好个性化配置。 */
+    public void setPersonalization(Personalization personalization) {
+        this.personalization = personalization;
     }
 
     /**
@@ -686,6 +710,152 @@ public class RagProperties {
         /** 设置最多保留的剧集标题数。 */
         public void setMaxEpisodeTitles(int maxEpisodeTitles) {
             this.maxEpisodeTitles = maxEpisodeTitles;
+        }
+    }
+
+    /**
+     * 多查询扩展配置。
+     */
+    public static class Expansion {
+
+        // 是否启用多查询扩展
+        private boolean enabled = false;
+        // 最多返回的查询数（含原查询）
+        private int maxQueries = 3;
+        // LLM 额外生成的查询数
+        private int additionalQueries = 1;
+        // 是否把用户偏好 query 加入扩展
+        private boolean includePreference = true;
+        // 单次扩展超时（毫秒）
+        private long timeoutMs = 2_500;
+        // 扩展失败后的退避时间（毫秒）
+        private long failureBackoffMs = 30_000;
+        // 多查询时每条 query 的召回条数
+        private int perQueryTopK = 10;
+
+        /** 是否启用多查询扩展。 */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /** 设置是否启用多查询扩展。 */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /** 最多返回的查询数。 */
+        public int getMaxQueries() {
+            return maxQueries;
+        }
+
+        /** 设置最多返回的查询数。 */
+        public void setMaxQueries(int maxQueries) {
+            this.maxQueries = maxQueries;
+        }
+
+        /** LLM 额外生成的查询数。 */
+        public int getAdditionalQueries() {
+            return additionalQueries;
+        }
+
+        /** 设置 LLM 额外生成的查询数。 */
+        public void setAdditionalQueries(int additionalQueries) {
+            this.additionalQueries = additionalQueries;
+        }
+
+        /** 是否加入偏好 query。 */
+        public boolean isIncludePreference() {
+            return includePreference;
+        }
+
+        /** 设置是否加入偏好 query。 */
+        public void setIncludePreference(boolean includePreference) {
+            this.includePreference = includePreference;
+        }
+
+        /** 单次扩展超时（毫秒）。 */
+        public long getTimeoutMs() {
+            return timeoutMs;
+        }
+
+        /** 设置单次扩展超时（毫秒）。 */
+        public void setTimeoutMs(long timeoutMs) {
+            this.timeoutMs = timeoutMs;
+        }
+
+        /** 扩展失败退避时间（毫秒）。 */
+        public long getFailureBackoffMs() {
+            return failureBackoffMs;
+        }
+
+        /** 设置扩展失败退避时间（毫秒）。 */
+        public void setFailureBackoffMs(long failureBackoffMs) {
+            this.failureBackoffMs = failureBackoffMs;
+        }
+
+        /** 多查询时每条 query 的召回条数。 */
+        public int getPerQueryTopK() {
+            return perQueryTopK;
+        }
+
+        /** 设置多查询时每条 query 的召回条数。 */
+        public void setPerQueryTopK(int perQueryTopK) {
+            this.perQueryTopK = perQueryTopK;
+        }
+    }
+
+    /**
+     * 用户偏好个性化配置。
+     */
+    public static class Personalization {
+
+        // 是否把偏好注入 RAG 查询
+        private boolean enabled = false;
+        // 画像缓存分钟数
+        private int cacheMinutes = 5;
+        // 画像使用的 Top 分类数
+        private int topCategories = 3;
+        // 画像使用的 Top 标签数
+        private int topTags = 5;
+
+        /** 是否把偏好注入 RAG 查询。 */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /** 设置是否把偏好注入 RAG 查询。 */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /** 画像缓存分钟数。 */
+        public int getCacheMinutes() {
+            return cacheMinutes;
+        }
+
+        /** 设置画像缓存分钟数。 */
+        public void setCacheMinutes(int cacheMinutes) {
+            this.cacheMinutes = cacheMinutes;
+        }
+
+        /** 画像 Top 分类数。 */
+        public int getTopCategories() {
+            return topCategories;
+        }
+
+        /** 设置画像 Top 分类数。 */
+        public void setTopCategories(int topCategories) {
+            this.topCategories = topCategories;
+        }
+
+        /** 画像 Top 标签数。 */
+        public int getTopTags() {
+            return topTags;
+        }
+
+        /** 设置画像 Top 标签数。 */
+        public void setTopTags(int topTags) {
+            this.topTags = topTags;
         }
     }
 }

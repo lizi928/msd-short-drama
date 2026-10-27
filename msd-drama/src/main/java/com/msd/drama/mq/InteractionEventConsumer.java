@@ -9,6 +9,7 @@ import com.msd.drama.mapper.EventConsumeLogMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +20,8 @@ import tools.jackson.databind.json.JsonMapper;
  * 消费日志和计数更新在同一个数据库事务内，失败时整体回滚并由容器重试。
  */
 @Component
+@ConditionalOnProperty(prefix = "msd.interaction.batch-consumer", name = "enabled",
+        havingValue = "false", matchIfMissing = true)
 public class InteractionEventConsumer {
 
     /** 日志记录器 */
@@ -69,7 +72,7 @@ public class InteractionEventConsumer {
                     KafkaTopics.INTERACTION_HISTORY
             },
             groupId = KafkaGroups.DRAMA_COUNTER,
-            concurrency = "3")
+            concurrency = "${msd.kafka.drama-concurrency:6}")
     @Transactional
     public void onMessage(ConsumerRecord<String, String> record) {
         // 1. 反序列化事件体，非法 JSON 直接抛出进入重试/DLQ

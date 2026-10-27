@@ -1,9 +1,16 @@
 package com.msd.agent.service;
 
+import com.alibaba.csp.sentinel.AsyncEntry;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.msd.agent.dto.AgentChatReply;
+import com.msd.agent.routing.AgentReplySanitizer;
+import com.msd.agent.routing.IntentRoute;
+import com.msd.agent.routing.IntentRouter;
+import com.msd.agent.routing.RouteProperties;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -11,11 +18,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.Locale;
 
 /**
- * Supervisor 调用服务：把 HTTP 请求转换成 AgentScope RuntimeContext 调用。
+ * Supervisor 调用服务：规则路由前置，必要时走 AUDIT 快速通道或 AgentScope。
  *
  * <p>audit profile 只提供 A2A 审核服务，不创建 Supervisor 调用链。</p>
  */
@@ -30,14 +39,38 @@ public class SupervisorAgentService {
     private final ObjectProvider<HarnessAgent> agentProvider;
     // 单次对话超时时间
     private final Duration requestTimeout;
+    // 规则前置路由器
+    private final IntentRouter intentRouter;
+    // 路由阈值和快速通道开关
+    private final RouteProperties routeProperties;
+    // 远程 audit-agent 快速通道
+    private final RemoteAuditService remoteAuditService;
+    // 回复内部标记清洗
+    private final AgentReplySanitizer replySanitizer;
+    // Sentinel agentChat 入口
+    private final AgentChatSentinel sentinel;
+    // 路由/对话指标
+    private final MeterRegistry meterRegistry;
 
     /**
-     * 注入懒加载的 Supervisor Agent 和请求超时时间。
+     * 注入 Agent、路由、快速通道和指标。
      */
     public SupervisorAgentService(ObjectProvider<HarnessAgent> agentProvider,
-            @Value("${msd.ai.agent.request-timeout:120s}") Duration requestTimeout) {
+            @Value("${msd.ai.agent.request-timeout:120s}") Duration requestTimeout,
+            IntentRouter intentRouter,
+            RouteProperties routeProperties,
+            RemoteAuditService remoteAuditService,
+            AgentReplySanitizer replySanitizer,
+            AgentChatSentinel sentinel,
+            MeterRegistry meterRegistry) {
         this.agentProvider = agentProvider;
         this.requestTimeout = requestTimeout;
+        this.intentRouter = intentRouter;
+        this.routeProperties = routeProperties;
+        this.remoteAuditService = remoteAuditService;
+        this.replySanitizer = replySanitizer;
+        this.sentinel = sentinel;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -45,6 +78,86 @@ public class SupervisorAgentService {
      */
     public Mono<AgentChatReply> chat(String userId, String sessionId,
                                      String message, Long episodeId) {
+        return Mono.defer(() -> {
+            // 1. 规则前置路由，决策不调用模型
+            IntentRouter.RouteDecision decision = intentRouter.route(message, userId, sessionId);
+            log.info("Agent route: userId={}, sessionId={}, route={}, source={}, "
+                            + "confidence={}, latencyMs={}",
+                    userId, sessionId, decision.route(), decision.source(),
+                    decision.confidence(), decision.latencyMs());
+
+            // 2. Sentinel 覆盖整条异步链路，被限流/熔断时快速失败
+            AsyncEntry entry;
+            try {
+                entry = sentinel.enter();
+            } catch (BlockException ex) {
+                log.warn("Agent chat blocked by Sentinel: userId={}, sessionId={}",
+                        userId, sessionId);
+                return Mono.error(new AgentUnavailableException(
+                        "当前对话请求过多，请稍后重试"));
+            }
+
+            // 3. AUDIT 高置信度走远程无状态快速通道；失败自动回退 Supervisor
+            Mono<AgentChatReply> result;
+            if (fastPathEligible(decision)) {
+                result = auditFastPath(userId, sessionId, message, decision);
+            } else {
+                result = supervisorCall(userId, sessionId, message, episodeId, decision);
+            }
+            return result
+                    .doOnSuccess(reply -> meterRegistry.counter("agent.chat",
+                                    "route", decision.route().name(),
+                                    "path", fastPathEligible(decision) ? "audit-fast" : "supervisor",
+                                    "outcome", "success")
+                            .increment())
+                    .doOnError(ex -> meterRegistry.counter("agent.chat",
+                                    "route", decision.route().name(),
+                                    "path", fastPathEligible(decision) ? "audit-fast" : "supervisor",
+                                    "outcome", "error")
+                            .increment())
+                    .doFinally(signal -> entry.exit());
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * AUDIT 高置信度且开关打开时允许快速通道。
+     */
+    private boolean fastPathEligible(IntentRouter.RouteDecision decision) {
+        return routeProperties.isFastPathAudit()
+                && decision.route() == IntentRoute.AUDIT
+                && decision.confidence() >= routeProperties.getHighConfidence();
+    }
+
+    /**
+     * 调用远程 audit-agent；降级或异常时回退 Supervisor。
+     */
+    private Mono<AgentChatReply> auditFastPath(String userId, String sessionId,
+            String message, IntentRouter.RouteDecision decision) {
+        long startNanos = System.nanoTime();
+        return remoteAuditService.audit(message, userId, sessionId)
+                .timeout(requestTimeout)
+                .flatMap(reply -> {
+                    if (reply.degraded()) {
+                        log.warn("Audit fast path degraded, fallback to supervisor: "
+                                + "userId={}, sessionId={}", userId, sessionId);
+                        return supervisorCall(userId, sessionId, message, null, decision);
+                    }
+                    return Mono.just(toReply(reply.reply(), sessionId, decision));
+                })
+                .onErrorResume(ex -> {
+                    log.warn("Audit fast path failed, fallback to supervisor: userId={}, "
+                            + "sessionId={}", userId, sessionId, ex);
+                    return supervisorCall(userId, sessionId, message, null, decision);
+                })
+                .doOnSuccess(reply -> meterRegistry.timer("agent.chat.fastpath")
+                        .record(Duration.ofNanos(System.nanoTime() - startNanos)));
+    }
+
+    /**
+     * 调用 AgentScope Supervisor，并在高置信度时附加服务端路由提示。
+     */
+    private Mono<AgentChatReply> supervisorCall(String userId, String sessionId,
+            String message, Long episodeId, IntentRouter.RouteDecision decision) {
         // 1. 获取 Agent，未启用或初始化失败时抛出业务异常
         HarnessAgent agent = resolveAgent();
         // 2. 组装运行时上下文，AgentScope 据此恢复会话状态
@@ -53,22 +166,46 @@ public class SupervisorAgentService {
                 .sessionId(sessionId)
                 .build();
 
-        // 3. 伴看场景把当前剧集 ID 放到用户消息前缀，供 companion-agent 直接使用
-        String agentMessage = episodeId != null && episodeId > 0
-                ? "[当前剧集ID=" + episodeId + "]\n" + message
-                : message;
+        // 3. 高置信度时把服务端路由提示放到消息最前面
+        StringBuilder agentMessage = new StringBuilder();
+        if (decision.highConfidence(routeProperties.getHighConfidence())) {
+            agentMessage.append("[ROUTE_HINT=")
+                    .append(decision.route().name().toLowerCase(Locale.ROOT))
+                    .append(";CONF=")
+                    .append(String.format(Locale.ROOT, "%.2f", decision.confidence()))
+                    .append("]\n");
+        }
+        // 4. 伴看场景把当前剧集 ID 放到用户消息前缀，供 companion-agent 直接使用
+        if (episodeId != null && episodeId > 0) {
+            agentMessage.append("[当前剧集ID=").append(episodeId).append("]\n");
+        }
+        agentMessage.append(message);
 
-        log.info("Agent chat start: userId={}, sessionId={}, episodeId={}",
-                userId, sessionId, episodeId);
-        // 4. 调用并统一处理超时、空响应和日志
-        return agent.call(new UserMessage(agentMessage), context)
+        log.info("Agent chat start: userId={}, sessionId={}, episodeId={}, route={}",
+                userId, sessionId, episodeId, decision.route());
+        // 5. 调用并统一处理超时、空响应和日志
+        return agent.call(new UserMessage(agentMessage.toString()), context)
                 .timeout(requestTimeout)
                 .switchIfEmpty(Mono.error(new AgentUnavailableException("Agent 未返回结果")))
-                .map(reply -> new AgentChatReply(reply.getTextContent(), sessionId))
+                .map(reply -> toReply(reply.getTextContent(), sessionId, decision))
                 .doOnSuccess(reply -> log.info(
                         "Agent chat done: userId={}, sessionId={}", userId, sessionId))
                 .doOnError(ex -> log.error(
                         "Agent chat failed: userId={}, sessionId={}", userId, sessionId, ex));
+    }
+
+    /**
+     * 构造响应并清洗内部标记。
+     */
+    private AgentChatReply toReply(String reply, String sessionId,
+            IntentRouter.RouteDecision decision) {
+        return new AgentChatReply(
+                replySanitizer.sanitize(reply),
+                sessionId,
+                decision.route().name(),
+                decision.source(),
+                decision.confidence(),
+                Math.round(decision.latencyMs()));
     }
 
     /**

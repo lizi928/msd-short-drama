@@ -4,6 +4,7 @@ import com.msd.content.config.RagProperties;
 import com.msd.content.dto.RagRecommendRequest;
 import com.msd.content.dto.RagRecommendResponse;
 import com.msd.content.dto.RagSource;
+import com.msd.content.dto.UserPreference;
 import com.msd.content.rag.RagMetadata;
 import com.msd.content.rag.RagTrace;
 import org.slf4j.Logger;
@@ -43,25 +44,45 @@ public class RagRecommendationService {
     private final ChatClient ragChatClient;
     // RAG 超时、rerank 等配置
     private final RagProperties properties;
+    // 用户偏好服务，测试中可为 null
+    private final UserPreferenceService preferenceService;
 
     /**
-     * 注入 RAG ChatClient 和配置。
+     * 兼容旧调用方的构造器，不加载用户偏好。
      */
     public RagRecommendationService(ChatClient ragChatClient, RagProperties properties) {
-        this.ragChatClient = ragChatClient;
-        this.properties = properties;
+        this(ragChatClient, properties, null);
     }
 
     /**
-     * 执行一次推荐。
+     * 注入 RAG ChatClient、配置和偏好服务。
+     */
+    public RagRecommendationService(ChatClient ragChatClient, RagProperties properties,
+                                    UserPreferenceService preferenceService) {
+        this.ragChatClient = ragChatClient;
+        this.properties = properties;
+        this.preferenceService = preferenceService;
+    }
+
+    /**
+     * 执行一次不携带用户上下文的推荐。
      */
     public RagRecommendResponse recommend(RagRecommendRequest request) {
+        return recommend(request, null);
+    }
+
+    /**
+     * 执行一次推荐，可选加载用户偏好。
+     */
+    public RagRecommendResponse recommend(RagRecommendRequest request, Long userId) {
         String query = request.query().trim();
         int topK = resolveTopK(request.topK());
 
         // 1. trace 通过 advisor param 进入 Query.context，后续改写/检索/精排共享
         RagTrace trace = new RagTrace(query);
         trace.setRequestedTopK(topK);
+        // 2. 可选加载画像，把偏好检索词交给多查询扩展器
+        loadPreference(userId, trace);
 
         try {
             ChatClientResponse response = ragChatClient.prompt()
@@ -97,6 +118,31 @@ public class RagRecommendationService {
                 return noResult(trace);
             }
             return toResponse(GENERATION_FALLBACK, trace, documents, topK);
+        }
+    }
+
+    /**
+     * 加载用户偏好；未登录、未开启或依赖失败时静默跳过。
+     */
+    private void loadPreference(Long userId, RagTrace trace) {
+        // 1. 未登录、未开启或测试环境未注入偏好服务
+        if (userId == null || userId <= 0 || preferenceService == null
+                || !properties.getPersonalization().isEnabled()) {
+            return;
+        }
+        try {
+            // 2. 查询画像并写入 trace，供多查询扩展器读取
+            UserPreference preference = preferenceService.get(userId);
+            trace.setUserId(userId);
+            trace.setPersonalizationEmpty(preference.empty());
+            trace.setPreferenceQuery(preference.preferenceQuery());
+            if (preference.degraded()) {
+                trace.markDegraded("personalization");
+            }
+        } catch (Exception ex) {
+            // 3. 画像失败不阻断推荐，只标记降级
+            trace.markDegraded("personalization");
+            log.warn("load user preference failed: userId={}", userId, ex);
         }
     }
 

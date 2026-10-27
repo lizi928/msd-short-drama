@@ -3,6 +3,8 @@ package com.msd.drama.mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.Map;
+
 /**
  * 互动计数 Mapper，只负责冗余计数的加减。
  * 递减统一带 count > 0 条件，避免 BIGINT UNSIGNED 在 0 时下溢报错。
@@ -84,4 +86,130 @@ public interface DramaCounterMapper {
      */
     @Update("UPDATE t_drama_episode SET play_count = play_count + 1 WHERE id = #{episodeId}")
     int incrementEpisodePlay(@Param("episodeId") Long episodeId);
+
+    /**
+     * 批量合并短剧点赞增量。
+     */
+    @Update("""
+            <script>
+            UPDATE t_drama
+            SET like_count = GREATEST(CAST(like_count AS SIGNED) + CASE id
+              <foreach collection="deltas" index="id" item="delta">
+                WHEN #{id} THEN #{delta}
+              </foreach>
+              ELSE 0 END, 0)
+            WHERE id IN (
+              <foreach collection="deltas" index="id" item="delta" separator=",">#{id}</foreach>
+            )
+            </script>
+            """)
+    int batchDramaLike(@Param("deltas") Map<Long, Long> deltas);
+
+    /**
+     * 批量合并短剧收藏增量。
+     */
+    @Update("""
+            <script>
+            UPDATE t_drama
+            SET favorite_count = GREATEST(CAST(favorite_count AS SIGNED) + CASE id
+              <foreach collection="deltas" index="id" item="delta">
+                WHEN #{id} THEN #{delta}
+              </foreach>
+              ELSE 0 END, 0)
+            WHERE id IN (
+              <foreach collection="deltas" index="id" item="delta" separator=",">#{id}</foreach>
+            )
+            </script>
+            """)
+    int batchDramaFavorite(@Param("deltas") Map<Long, Long> deltas);
+
+    /**
+     * 批量合并短剧评论增量。
+     */
+    @Update("""
+            <script>
+            UPDATE t_drama
+            SET comment_count = GREATEST(CAST(comment_count AS SIGNED) + CASE id
+              <foreach collection="deltas" index="id" item="delta">
+                WHEN #{id} THEN #{delta}
+              </foreach>
+              ELSE 0 END, 0)
+            WHERE id IN (
+              <foreach collection="deltas" index="id" item="delta" separator=",">#{id}</foreach>
+            )
+            </script>
+            """)
+    int batchDramaComment(@Param("deltas") Map<Long, Long> deltas);
+
+    /**
+     * 批量合并短剧浏览量增量。
+     */
+    @Update("""
+            <script>
+            UPDATE t_drama
+            SET view_count = GREATEST(CAST(view_count AS SIGNED) + CASE id
+              <foreach collection="deltas" index="id" item="delta">
+                WHEN #{id} THEN #{delta}
+              </foreach>
+              ELSE 0 END, 0)
+            WHERE id IN (
+              <foreach collection="deltas" index="id" item="delta" separator=",">#{id}</foreach>
+            )
+            </script>
+            """)
+    int batchDramaView(@Param("deltas") Map<Long, Long> deltas);
+
+    /**
+     * 批量合并剧集点赞增量。
+     */
+    @Update("""
+            <script>
+            UPDATE t_drama_episode
+            SET like_count = GREATEST(CAST(like_count AS SIGNED) + CASE id
+              <foreach collection="deltas" index="id" item="delta">
+                WHEN #{id} THEN #{delta}
+              </foreach>
+              ELSE 0 END, 0)
+            WHERE id IN (
+              <foreach collection="deltas" index="id" item="delta" separator=",">#{id}</foreach>
+            )
+            </script>
+            """)
+    int batchEpisodeLike(@Param("deltas") Map<Long, Long> deltas);
+
+    /**
+     * 批量合并剧集评论增量。
+     */
+    @Update("""
+            <script>
+            UPDATE t_drama_episode
+            SET comment_count = GREATEST(CAST(comment_count AS SIGNED) + CASE id
+              <foreach collection="deltas" index="id" item="delta">
+                WHEN #{id} THEN #{delta}
+              </foreach>
+              ELSE 0 END, 0)
+            WHERE id IN (
+              <foreach collection="deltas" index="id" item="delta" separator=",">#{id}</foreach>
+            )
+            </script>
+            """)
+    int batchEpisodeComment(@Param("deltas") Map<Long, Long> deltas);
+
+    /**
+     * 批量合并剧集播放量增量。
+     */
+    @Update("""
+            <script>
+            UPDATE t_drama_episode
+            SET play_count = GREATEST(CAST(play_count AS SIGNED) + CASE id
+              <foreach collection="deltas" index="id" item="delta">
+                WHEN #{id} THEN #{delta}
+              </foreach>
+              ELSE 0 END, 0)
+            WHERE id IN (
+              <foreach collection="deltas" index="id" item="delta" separator=",">#{id}</foreach>
+            )
+            </script>
+            """)
+    int batchEpisodePlay(@Param("deltas") Map<Long, Long> deltas);
 }

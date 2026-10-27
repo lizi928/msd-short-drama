@@ -15,6 +15,13 @@ export function fetchDramaDetail(dramaId) {
 }
 
 /**
+ * 短剧计数；点赞/收藏等异步事件完成后用于校准 UI。
+ */
+export function fetchDramaStats(dramaId) {
+    return request(`/api/drama/internal/dramas/${dramaId}/stats`)
+}
+
+/**
  * 启用中的短剧分类，供搜索页筛选。
  */
 export function fetchCategories() {

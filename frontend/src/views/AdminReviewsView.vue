@@ -352,7 +352,7 @@ async function rebuildIndex() {
             </template>
         </main>
 
-        <AppModal v-model="decisionOpen" :title="decision === 'APPROVE' ? '通过审核' : '驳回短剧'">
+        <AppModal v-model="decisionOpen" size="lg" :title="decision === 'APPROVE' ? '通过审核' : '驳回短剧'">
             <form class="decision-form" @submit.prevent="confirmDecision">
                 <p class="decision-title">
                     {{ decisionTarget?.title }}
@@ -372,7 +372,7 @@ async function rebuildIndex() {
             </form>
         </AppModal>
 
-        <AppModal v-model="logsOpen" title="审核日志">
+        <AppModal v-model="logsOpen" size="lg" title="审核日志">
             <div v-if="logsLoading" class="log-list">
                 <SkeletonBlock v-for="index in 3" :key="index" height="54px" radius="10px"/>
             </div>
@@ -583,5 +583,63 @@ async function rebuildIndex() {
     margin: 0;
     color: var(--muted);
     font-size: 12px;
+}
+
+/* ---------- 桌面端（≥1024）：一行一条审核记录 ---------- */
+
+@media (min-width: 1024px) {
+    .review-page {
+        gap: 14px;
+    }
+
+    .filter-strip {
+        flex-wrap: wrap;
+        overflow: visible;
+    }
+
+    .card-list {
+        gap: 10px;
+    }
+
+    .review-card {
+        grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) auto;
+        align-items: center;
+        column-gap: 24px;
+        row-gap: 6px;
+        padding: 14px 20px;
+    }
+
+    .review-head {
+        grid-column: 1;
+        grid-row: 1;
+        align-items: center;
+    }
+
+    .review-copy h2 {
+        margin-bottom: 0;
+        font-size: 15px;
+    }
+
+    .review-copy p {
+        display: none;
+    }
+
+    .review-meta {
+        grid-column: 1;
+        grid-row: 2;
+        flex-wrap: nowrap;
+    }
+
+    .ai-summary {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+    }
+
+    .review-actions {
+        grid-column: 3;
+        grid-row: 1 / span 2;
+        flex-wrap: nowrap;
+        justify-content: flex-end;
+    }
 }
 </style>

@@ -286,4 +286,56 @@ async function confirmDelete() {
     display: flex;
     gap: 8px;
 }
+
+/* ---------- 桌面端（≥1024）：一行一条评论 ---------- */
+
+@media (min-width: 1024px) {
+    .comment-admin-page {
+        gap: 14px;
+    }
+
+    .filter-strip {
+        flex-wrap: wrap;
+        overflow: visible;
+    }
+
+    .comment-list {
+        gap: 10px;
+    }
+
+    .comment-card {
+        grid-template-columns: minmax(240px, 280px) minmax(0, 1fr) auto;
+        align-items: center;
+        column-gap: 24px;
+        row-gap: 6px;
+        padding: 14px 20px;
+    }
+
+    .comment-head {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .comment-content {
+        display: -webkit-box;
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+    }
+
+    .comment-meta {
+        grid-column: 1;
+        grid-row: 2;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+    }
+
+    .comment-actions {
+        grid-column: 3;
+        grid-row: 1 / span 2;
+        justify-content: flex-end;
+    }
+}
 </style>

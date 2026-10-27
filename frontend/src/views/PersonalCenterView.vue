@@ -134,7 +134,8 @@ onMounted(() => {
         <PageHeader title="我的" :show-back="false"/>
 
         <main class="app-main profile-main">
-            <section class="profile-card">
+            <aside class="profile-aside">
+                <section class="profile-card">
                 <div class="profile-head">
                     <UserAvatar
                         :name="auth.displayName"
@@ -174,7 +175,9 @@ onMounted(() => {
                     </button>
                 </div>
             </section>
+            </aside>
 
+            <div class="profile-content">
             <section class="stats-section">
                 <div class="section-title">
                     <h2>我的数据</h2>
@@ -266,6 +269,7 @@ onMounted(() => {
             <button class="btn btn-ghost btn-block" type="button" @click="logout">
                 退出登录
             </button>
+            </div>
         </main>
 
         <AppModal v-model="editOpen" title="编辑资料">
@@ -551,5 +555,89 @@ onMounted(() => {
     color: rgba(255, 255, 255, 0.28);
     font-size: 10px;
     text-align: right;
+}
+
+.profile-aside,
+.profile-content {
+    display: grid;
+    gap: 14px;
+}
+
+/* ---------- 桌面端（≥1024）：左侧资料卡 + 右侧内容 ---------- */
+
+@media (min-width: 1024px) {
+    .profile-main {
+        grid-template-columns: 340px minmax(0, 1fr);
+        align-items: start;
+        gap: 24px;
+    }
+
+    .profile-aside {
+        position: sticky;
+        top: calc(var(--topbar-height) + 24px);
+    }
+
+    .profile-card,
+    .points-card {
+        padding: 20px;
+    }
+
+    /* 积分卡在窄侧栏里改为上下排布 */
+    .points-card {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+    }
+
+    .points-side {
+        justify-items: start;
+    }
+
+    .points-main strong {
+        font-size: 30px;
+    }
+
+    .stats-section {
+        padding: 18px;
+    }
+
+    .stat-card {
+        padding: 16px 6px;
+    }
+
+    .stat-card strong {
+        font-size: 20px;
+    }
+
+    .stat-label {
+        font-size: 11px;
+    }
+
+    /* 菜单改为两列卡片，避免长列表在宽屏上留白 */
+    .menu-card {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        padding: 0;
+        border: none;
+        background: transparent;
+    }
+
+    .menu-row {
+        padding: 15px 16px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        font-size: 13px;
+    }
+
+    .menu-row:last-child {
+        border-bottom: 1px solid var(--line);
+    }
+
+    .profile-content > .btn {
+        justify-self: start;
+        width: auto;
+        min-width: 160px;
+    }
 }
 </style>

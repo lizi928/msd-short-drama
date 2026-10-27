@@ -314,12 +314,14 @@ CREATE TABLE IF NOT EXISTS `t_comment` (
     `parent_id`        BIGINT UNSIGNED  NOT NULL DEFAULT 0      COMMENT '直接父评论 ID，根评论为 0',
     `reply_to_user_id` BIGINT UNSIGNED  NULL                    COMMENT '回复目标用户 ID',
     `content`          VARCHAR(1000)    NOT NULL                COMMENT '评论内容',
+    `client_request_id` VARCHAR(64)     NULL                    COMMENT '客户端请求幂等键',
     `like_count`       BIGINT UNSIGNED  NOT NULL DEFAULT 0      COMMENT '点赞数（冗余）',
     `reply_count`      BIGINT UNSIGNED  NOT NULL DEFAULT 0      COMMENT '回复数（冗余，只记在根评论）',
     `status`           TINYINT UNSIGNED NOT NULL DEFAULT 1      COMMENT '状态：0 待审，1 可见，2 隐藏，3 已删除',
     `create_time`      DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `update_time`      DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_request` (`user_id`, `client_request_id`),
     KEY `idx_drama_root` (`drama_id`, `status`, `root_id`, `create_time`, `id`),
     KEY `idx_root` (`root_id`, `status`, `create_time`, `id`),
     KEY `idx_episode` (`episode_id`, `status`, `create_time`, `id`),
@@ -352,6 +354,7 @@ CREATE TABLE IF NOT EXISTS `t_watch_history` (
 CREATE TABLE IF NOT EXISTS `t_outbox_event` (
     `id`              BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT COMMENT '事件 ID',
     `event_id`        CHAR(36)         NOT NULL                COMMENT '事件 UUID，消费端幂等键',
+    `user_id`         BIGINT UNSIGNED  NULL                    COMMENT '触发事件的用户 ID，用于事件归属校验',
     `topic`           VARCHAR(128)     NOT NULL                COMMENT 'Kafka Topic',
     `event_type`      VARCHAR(64)      NOT NULL                COMMENT '事件类型：LIKE/FAVORITE/COMMENT/HISTORY/DRAMA_CHANGED/AI_REVIEW_REQUEST',
     `aggregate_type`  VARCHAR(32)      NOT NULL                COMMENT '聚合类型：DRAMA/EPISODE/COMMENT/ORDER',
@@ -362,12 +365,15 @@ CREATE TABLE IF NOT EXISTS `t_outbox_event` (
     `retry_count`     INT UNSIGNED     NOT NULL DEFAULT 0      COMMENT '重试次数',
     `next_retry_time` DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '下次重试时间',
     `sent_at`         DATETIME(3)      NULL                    COMMENT '发送成功时间',
+    `claim_token`     VARCHAR(64)      NULL                    COMMENT '发送认领 token，防止多实例重复发送',
+    `locked_until`    DATETIME(3)      NULL                    COMMENT '认领租约到期时间',
     `last_error`      VARCHAR(500)     NOT NULL DEFAULT ''     COMMENT '最后一次错误',
     `create_time`     DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `update_time`     DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_event_id` (`event_id`),
-    KEY `idx_poll` (`status`, `next_retry_time`, `id`)
+    KEY `idx_poll` (`status`, `next_retry_time`, `id`),
+    KEY `idx_user_event` (`user_id`, `event_id`)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_0900_ai_ci
@@ -380,7 +386,8 @@ CREATE TABLE IF NOT EXISTS `t_event_consume_log` (
     `topic`          VARCHAR(128)    NOT NULL                COMMENT 'Kafka Topic',
     `consumed_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '消费时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_group_event` (`consumer_group`, `event_id`)
+    UNIQUE KEY `uk_group_event` (`consumer_group`, `event_id`),
+    KEY `idx_event_id` (`event_id`)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_0900_ai_ci

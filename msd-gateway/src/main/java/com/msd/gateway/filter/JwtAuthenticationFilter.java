@@ -4,6 +4,7 @@ import com.msd.common.constant.CommonConstants;
 import com.msd.gateway.auth.JwtTokenParser;
 import com.msd.gateway.auth.JwtUser;
 import io.jsonwebtoken.JwtException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -42,14 +43,18 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
 
     // Token 解析器
     private final JwtTokenParser tokenParser;
+    // 服务间内部 token；为空时 dev fail-open
+    private final String internalToken;
     // Ant 风格路径匹配器
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
 
     /**
-     * 注入 Token 解析器。
+     * 注入 Token 解析器和内部服务 token。
      */
-    public JwtAuthenticationFilter(JwtTokenParser tokenParser) {
+    public JwtAuthenticationFilter(JwtTokenParser tokenParser,
+            @Value("${msd.security.internal-token:}") String internalToken) {
         this.tokenParser = tokenParser;
+        this.internalToken = internalToken == null ? "" : internalToken.trim();
     }
 
     /**
@@ -87,15 +92,20 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
         // 4. 重写请求头，准备透传给下游
         JwtUser currentUser = user;
         ServerHttpRequest mutated = request.mutate().headers(headers -> {
-            // 4.1 先移除客户端自带的身份头，防止伪造
+            // 4.1 先移除客户端自带的身份头和内部 token，防止伪造
             headers.remove(CommonConstants.HEADER_USER_ID);
             headers.remove(CommonConstants.HEADER_USER_ROLE);
+            headers.remove(CommonConstants.HEADER_INTERNAL_TOKEN);
             // 4.2 下游只需要用户信息，不需要原始 Token
             headers.remove(HttpHeaders.AUTHORIZATION);
             // 4.3 鉴权通过时，用 Token 中的用户信息覆盖请求头
             if (currentUser != null) {
                 headers.set(CommonConstants.HEADER_USER_ID, currentUser.userId());
                 headers.set(CommonConstants.HEADER_USER_ROLE, currentUser.role());
+            }
+            // 4.4 Agent 路由注入服务端内部 token；客户端伪造值已在上一步剥离
+            if (path.startsWith("/api/agent/") && !internalToken.isBlank()) {
+                headers.set(CommonConstants.HEADER_INTERNAL_TOKEN, internalToken);
             }
         }).build();
 

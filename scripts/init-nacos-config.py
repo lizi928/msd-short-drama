@@ -32,6 +32,7 @@ CONFIGS = [
     ("agent-config.yaml", "agent-config.yaml", GROUP, "yaml"),
     ("content-config.yaml", "content-config.yaml", GROUP, "yaml"),
     ("msd-drama.yaml", "msd-drama.yaml", GROUP, "yaml"),
+    ("msd-interaction.yaml", "msd-interaction.yaml", GROUP, "yaml"),
     ("msd-order.yaml", "msd-order.yaml", GROUP, "yaml"),
     ("sentinel-gateway-flow.json", "sentinel-gateway-flow.json", SENTINEL_GROUP, "json"),
     ("sentinel-agent-degrade.json", "sentinel-agent-degrade.json", SENTINEL_GROUP, "json"),

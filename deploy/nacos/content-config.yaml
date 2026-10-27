@@ -56,6 +56,21 @@ msd:
       document:
         max-description-chars: 1200
         max-episode-titles: 30
+      # 多查询扩展：默认查询 + 1 个变体 + 可选偏好 query
+      expansion:
+        enabled: true
+        max-queries: 3
+        additional-queries: 1
+        include-preference: true
+        timeout-ms: 2500
+        failure-backoff-ms: 30000
+        per-query-top-k: 10
+      # 用户偏好：画像缓存和 Top 分类/标签
+      personalization:
+        enabled: true
+        cache-minutes: 5
+        top-categories: 3
+        top-tags: 5
     # 结构化审核：严格 JSON + 标签枚举
     audit:
       enabled: true

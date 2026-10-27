@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { coverPalette } from '../utils/gradient'
 
 const props = defineProps({
@@ -8,6 +8,11 @@ const props = defineProps({
         default: ''
     },
     title: {
+        type: String,
+        default: ''
+    },
+    // 有真实封面时优先显示；为空或加载失败回退渐变
+    src: {
         type: String,
         default: ''
     },
@@ -37,6 +42,14 @@ const style = computed(() => ({
 }))
 
 const mark = computed(() => (props.title || '').trim().slice(0, 1) || '剧')
+
+// 1. 封面地址变化时重新尝试加载
+const imageFailed = ref(false)
+watch(() => props.src, () => {
+    imageFailed.value = false
+})
+
+const showImage = computed(() => Boolean(props.src) && !imageFailed.value)
 </script>
 
 <template>
@@ -47,12 +60,23 @@ const mark = computed(() => (props.title || '').trim().slice(0, 1) || '剧')
         role="img"
         :aria-label="title || '短剧封面'"
     >
-        <span class="cover-glow" aria-hidden="true"></span>
-        <span class="cover-lines" aria-hidden="true"></span>
-        <svg v-if="showMark" class="cover-mark" viewBox="0 0 100 100" aria-hidden="true">
-            <text x="100" y="96" text-anchor="end" font-size="96" font-weight="900"
-                  fill="var(--cover-mark)">{{ mark }}</text>
-        </svg>
+        <img
+            v-if="showImage"
+            class="cover-image"
+            :src="src"
+            :alt="title || '短剧封面'"
+            loading="lazy"
+            decoding="async"
+            @error="imageFailed = true"
+        >
+        <template v-else>
+            <span class="cover-glow" aria-hidden="true"></span>
+            <span class="cover-lines" aria-hidden="true"></span>
+            <svg v-if="showMark" class="cover-mark" viewBox="0 0 100 100" aria-hidden="true">
+                <text x="100" y="96" text-anchor="end" font-size="96" font-weight="900"
+                      fill="var(--cover-mark)">{{ mark }}</text>
+            </svg>
+        </template>
         <slot/>
     </div>
 </template>
@@ -68,6 +92,14 @@ const mark = computed(() => (props.title || '').trim().slice(0, 1) || '剧')
 
 .cover.is-rounded {
     border-radius: 14px;
+}
+
+.cover-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .ratio-poster {

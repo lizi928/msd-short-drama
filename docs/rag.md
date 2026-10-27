@@ -69,6 +69,15 @@ msd-gateway (JWT)
 - 失败后 30 秒内不再调用模型。
 - 保留 `Query.history` 和 `Query.context`，`RagTrace` 继续传给检索器和精排器。
 
+### 2.2.1 多查询扩展
+
+`msd.ai.rag.expansion.enabled=true` 时，`LlmMultiQueryExpander` 在改写之后生成 1 个额外查询变体；如果 `RagTrace` 带有画像生成的偏好检索词，也会加入。默认最多 3 条（原查询 + 偏好词 + 变体）。
+
+- 每条检索词独立走向量 + BM25，`per-query-top-k` 默认 10，控制下游放大。
+- `RrfDocumentJoiner` 对多查询结果按自身排名做跨查询 RRF，按 `Document.id` 去重；单查询时直接返回原结果，保持旧行为。
+- 扩展失败/超时回退原查询并标记 `expansion`；偏好不可用时标记 `personalization`。
+- 首页「为你推荐」不走多查询，不调用 LLM。
+
 ### 2.3 混合检索与 RRF
 
 [HybridRetriever](../msd-content-service/src/main/java/com/msd/content/rag/HybridRetriever.java) 并行执行两路：
@@ -195,6 +204,18 @@ Milvus 2.6.x 的 `common.storageType` 必须为 `remote`；`minio` 已废弃，�
 
 两种情况 HTTP 仍为 200，`degraded=true`，通过 `degradedFlags` 区分原因。
 
+### 4.1.1 首页「为你推荐」
+
+经网关：`GET /api/content/internal/ai/rag/personalized?limit=6`
+
+直连：`GET http://127.0.0.1:8107/internal/ai/rag/personalized?limit=6`
+
+- 需要 `X-User-Id`，由网关注入；直连测试可手动带。
+- 不调用 LLM：由 `msd-interaction` 的 `/internal-source/users/{userId}/behavior` 聚合收藏/点赞/观看权重，content 再结合 `DramaCatalogClient` 的分类/标签做规则排序。
+- 排序：分类匹配 3 分、标签匹配 2 分、热度 0.5 分、30 天内上新 1 分；排除最近已看/已收藏，不足用热播补齐。
+- 无偏好或 interaction/Redis 不可用时回退热播，返回 `personalized=false`、`coldStart=true`；前端只在 `personalized=true` 时展示区块。
+- 全链路不跨服务 join 表：interaction 只返回行为，目录元数据由 content 通过已有目录接口获取。
+
 ### 4.2 重建索引
 
 `POST /internal/ai/rag/reindex`（只允许直连 8107）
@@ -286,12 +307,20 @@ RAG 调优参数在 Nacos `content-config.yaml`：
 | `msd.ai.rag.catalog.page-size` | `200` | 目录导出分页 |
 | `msd.ai.rag.document.max-description-chars` | `1200` | 简介裁剪 |
 | `msd.ai.rag.document.max-episode-titles` | `30` | 剧集标题裁剪 |
+| `msd.ai.rag.expansion.enabled` | `true`（Nacos） | 多查询扩展开关 |
+| `msd.ai.rag.expansion.max-queries` | `3` | 最多查询数（含原查询） |
+| `msd.ai.rag.expansion.additional-queries` | `1` | LLM 额外生成数 |
+| `msd.ai.rag.expansion.per-query-top-k` | `10` | 每条 query 的召回数 |
+| `msd.ai.rag.personalization.enabled` | `true`（Nacos） | 是否把画像偏好注入 RAG |
+| `msd.ai.rag.personalization.cache-minutes` | `5` | 画像缓存分钟数 |
 
 ## 6. 降级行为
 
 | 标记 | 触发条件 | 行为 |
 |---|---|---|
 | `rewrite` | DeepSeek 超时/异常/空结果 | 用原查询继续检索 |
+| `expansion` | 多查询模型超时/异常/空结果 | 保留原查询 + 偏好 query |
+| `personalization` | interaction/画像依赖失败 | 不使用偏好，继续推荐 |
 | `vector` | Milvus 不可用/超时 | 只返回 BM25 结果 |
 | `bm25` | ES 不可用/超时/索引不存在 | 只返回向量结果 |
 | `rerank` | Key 为空、非 2xx、超时、解析失败、退避 | 回退 RRF Top 3 |
@@ -309,7 +338,7 @@ mvn -B -pl msd-content-service -am test
 mvn -B -pl msd-content-service -am -DskipTests package
 ```
 
-覆盖：Document 构建、jieba 分词、ES mapping/检索、RRF、混合检索降级、Rerank 回退、改写回退、推荐响应映射、空上下文模板。
+覆盖：Document 构建、jieba 分词、ES mapping/检索、RRF、混合检索降级、Rerank 回退、改写回退、推荐响应映射、空上下文模板、多查询 RRF、偏好 query、首页个性化排序与冷启动。
 
 真实基础设施联调：
 
@@ -326,6 +355,13 @@ TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
 curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"有没有那种先婚后爱的甜宠剧"}'
+
+# 行为聚合（服务间直连）
+curl http://127.0.0.1:8104/internal-source/users/1006/behavior
+
+# 首页个性化推荐（需要用户 Token）
+curl 'http://127.0.0.1:8000/api/content/internal/ai/rag/personalized?limit=6' \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 验收点：
@@ -348,11 +384,17 @@ curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
 - 网关 6 条路由；无 Token 401；reindex/status 404；user/drama/order/interaction 旧路由回归 200。
 - **Milvus 配置修复**：此前 `COMMON_STORAGETYPE=minio` 导致 Arrow FS 初始化失败并触发 `MmapManager` / `Failed to get filesystem` panic。改为 `COMMON_STORAGETYPE=remote` 后，2.6.4 使用原 `milvus_data` 数据卷直接恢复，无需删库或换镜像；2.5.7/2.6.7 的尝试已不再需要。
 
+P4 联调补充（2026-10-27，本地未启动 Milvus/ES）：
+
+- `GET /internal/ai/rag/personalized`：1006/1003 返回不同排序；未互动用户 9999 返回 `personalized=false, coldStart=true`，回退热播；网关未登录 401。
+- `POST /internal/ai/rag/recommend` 带 `X-User-Id` 时日志出现 3 条检索 query（原查询 + 变体 + 偏好），不带时为 2 条；多查询 RRF 与偏好 query 生效。
+- Milvus/ES 均不可用时 `degradedFlags=["vector","bm25"]`，接口仍返回 200 和 no-match 兜底文案，耗时约 2.6–6.3s；这是当前环境缺少中间件，不是代码回归。
+
 ## 8. 已知限制
 
 - 只做全量重建，不做 Kafka 实时增量索引。
-- 不做用户画像、观看历史个性化排序。
-- 前端没有独立 RAG 推荐页，当前只提供后端 API。
+- 用户画像为实时聚合 + Redis 缓存，不落库、不做离线训练；偏好变化最多 5 分钟生效。
+- 首页已接入「为你推荐」；RAG 对话推荐仍没有独立页面。
 - 现有 `msd-agent-service` 的 Mock RAG 保留，不替换；A2A/Supervisor 未接入本 RAG。
 - 本地 ES 关闭安全认证，仅绑定 `127.0.0.1`；生产需要额外鉴权和网络隔离。
 - Milvus 未启用认证，生产需要补齐。

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { fetchFavorites, unfavoriteDrama } from '../api/interaction'
 import { useToastStore } from '../stores/toast'
 import { usePagedList } from '../composables/usePagedList'
+import { useMediaQuery } from '../composables/useMediaQuery'
 import CollectionItem from '../components/CollectionItem.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ErrorState from '../components/ErrorState.vue'
@@ -13,6 +14,7 @@ import SkeletonBlock from '../components/SkeletonBlock.vue'
 
 const router = useRouter()
 const toast = useToastStore()
+const isDesktop = useMediaQuery('(min-width: 1024px)')
 
 const {
     items,
@@ -88,6 +90,7 @@ async function cancelFavorite(item) {
                         :time-value="item.favoriteTime"
                         action-text="取消收藏"
                         :action-loading="pendingId === item.dramaId"
+                        :layout="isDesktop ? 'grid' : 'row'"
                         @open="open"
                         @action="cancelFavorite"
                     />
@@ -111,5 +114,13 @@ async function cancelFavorite(item) {
 .collection-list {
     display: grid;
     gap: 10px;
+}
+
+@media (min-width: 1024px) {
+    .list-skeleton,
+    .collection-list {
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 14px;
+    }
 }
 </style>

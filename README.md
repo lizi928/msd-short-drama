@@ -1,6 +1,6 @@
 # 码上短剧
 
-微服务 + AI 短剧平台。0.1-0.4、2.1-2.6、**分布式事务与异步解耦（数据一致性）**、**RAG 内容推荐**、**首页多级缓存与 Java 21 虚拟线程**、**AI 伴看与结构化审核**模块已完成并验证；Vue 3 + Vite 前端已接入登录、首页（含继续观看）、详情、播放/解锁、互动、个人中心、充值中心、创作者工作台、审核台和 AI 伴看面板。剩余功能与分阶段计划见 [docs/roadmap.md](docs/roadmap.md)。
+微服务 + AI 短剧平台。0.1-0.4、2.1-2.6、**分布式事务与异步解耦（数据一致性）**、**RAG 内容推荐**、**首页多级缓存与 Java 21 虚拟线程**、**AI 伴看与结构化审核**模块已完成并验证；Vue 3 + Vite 前端已接入登录、首页（含继续观看、个性化推荐）、详情、播放/解锁、互动、个人中心、充值中心、创作者工作台、审核台和 AI 伴看面板。剩余功能与分阶段计划见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 技术基线
 
@@ -25,11 +25,11 @@
 | `msd-order` | 8103 | 充值下单、模拟支付、积分账户/流水、剧集解锁、已解锁列表 |
 | `msd-interaction` | 8104 | 点赞、收藏、评论、评论治理、观看历史、继续观看、outbox |
 | `msd-agent-service` | 8105 / 8106 | AI Agent / AgentScope Supervisor（8105，含 companion-agent）；audit A2A 服务（8106，`audit` profile） |
-| `msd-content-service` | 8107 | RAG 推荐、AI 伴看、分集摘要、结构化审核；Milvus + ES 混合检索、Rerank |
+| `msd-content-service` | 8107 | RAG 推荐、个性化推荐、多查询扩展、AI 伴看、分集摘要、结构化审核；Milvus + ES 混合检索、Rerank |
 
 > 冒烟模块 `msd-infra-smoke` 与原始 Nacos 示例 `msd-demo` 在 0.4 验证通过后已删除，仓库只保留生产代码。验证结论与可复用配置见 [docs/chapter-0-baseline.md](docs/chapter-0-baseline.md)。
 
-前端位于 `frontend/`（Vue 3 + Vite + JavaScript），开发端口 5173；生产构建由网关在 8000 托管。点开短剧进入红果式全屏 Feed，上下滑切换本剧剧集，右侧抖音式动态点赞/收藏、评论/分享，简介/选集/评论使用底部弹层。封面使用 CSS/SVG 渐变占位图，播放器为占位画面模拟播放并上报观看历史。
+前端位于 `frontend/`（Vue 3 + Vite + JavaScript），开发端口 5173；生产构建由网关在 8000 托管。点开短剧进入红果式全屏 Feed，上下滑切换本剧剧集，右侧抖音式动态点赞/收藏、评论/分享，简介/选集/评论使用底部弹层。封面优先使用 MinIO 中的公开海报，加载失败回退 CSS/SVG 渐变占位图；播放器使用真实 `<video>` 播放 MinIO 中的测试短片并上报观看历史。
 
 ## 前端
 
@@ -272,6 +272,7 @@ mvn -B -U -T 1C clean package -DskipTests
 | [docs/roadmap.md](docs/roadmap.md) | 剩余功能路线图：伴看前端、审核、充值、搜索、内容后台与生产化 |
 | [docs/architecture.svg](docs/architecture.svg) | 当前项目架构图（含 RAG、伴看与审核） |
 | [docs/runbook.md](docs/runbook.md) | 本地启动顺序、命令、排障 |
+| [docs/test-data.md](docs/test-data.md) | AI 短剧测试数据：来源、媒体上传、布隆刷新与清理 |
 | [docs/rag.md](docs/rag.md) | RAG 推荐架构、五段链路、API、配置与降级 |
 | [docs/recharge.md](docs/recharge.md) | 积分充值、模拟支付、订单幂等与积分流水 |
 | [docs/creator.md](docs/creator.md) | 创作者工作台、管理端审核、审核操作日志 |
@@ -285,7 +286,7 @@ mvn -B -U -T 1C clean package -DskipTests
 | [docs/playback.md](docs/playback.md) | 剧集播放、积分解锁、观看历史上报 |
 | [docs/interaction.md](docs/interaction.md) | 点赞、收藏、评论、观看历史列表 |
 | [docs/personal-center.md](docs/personal-center.md) | 个人中心资料、统计与四个列表 |
-| [docs/frontend.md](docs/frontend.md) | Vue 前端路由、页面接口、占位播放器、构建与静态托管 |
+| [docs/frontend.md](docs/frontend.md) | Vue 前端路由、页面接口、视频播放器、构建与静态托管 |
 | [docs/schema.md](docs/schema.md) | 17 张核心业务表 + 一致性辅助表、枚举字典、事务与最终一致规则 |
 | [docs/chapter-0-baseline.md](docs/chapter-0-baseline.md) | 已验证的版本组合、应用配置、Rerank 契约 |
 | [docs/compatibility-matrix.md](docs/compatibility-matrix.md) | 兼容性矩阵与实测证据 |
@@ -377,7 +378,10 @@ msd:
 
 - 新接口：`POST /api/agent/internal/ai/agent/chat`（直连 8105 为 `/internal/ai/agent/chat`），请求体 `{"message":"...","sessionId":"...","episodeId":6005}`；`episodeId` 可选，伴看问题需要传，`X-User-Id` 由网关 JWT 过滤器注入。
 - 主 Agent `supervisor` 读取 `.agentscope/workspace/AGENTS.md`，按路由规则调度 `social-agent`、`audit-agent`、`data-agent`、`companion-agent`。
+- 秒级意图路由：`POST /api/agent/internal/ai/agent/route`（直连 8105 为 `/internal/ai/agent/route`）只做规则/缓存决策，不调用模型；高置信度结果注入 `[ROUTE_HINT=...]`，AUDIT 可走远程快速通道，详见 [docs/companion.md](docs/companion.md#6-意图路由与工具沙箱)。
 - 工具：`get_home_dramas`、`get_drama_detail`、`list_drama_episodes`，通过 Feign 查询 `msd-drama` 的只读内部接口；审核任务另有 `audit_remote` 远程 A2A 工具；伴看使用 `get_episode_summary`、`search_drama_context` 查询 content-service 的当前集摘要和前情，详见 [docs/companion.md](docs/companion.md)。
+- 工具权限沙箱：只注册 allowlist 业务工具，校验 ID/分页/文本长度并记录参数哈希；shell/文件/Web/记忆工具关闭，单会话最多 4 次 `agent_spawn`。
+- 8105/8106 支持 `X-Internal-Token`；生产设置 `MSD_INTERNAL_TOKEN`，网关会剥离客户端伪造值后为 Agent 路由注入。
 - 会话状态存 Redis，key 前缀 `mashang:agent:session:`；Redis 连接复用 Nacos `common.yaml` 的 `spring.data.redis.*`。
 - 模型默认 `deepseek-flash`，可用 `msd.ai.agent.model` 或 `DEEPSEEK_AGENT_MODEL` 覆盖；必要时用 `DEEPSEEK_BASE_URL` 指向兼容网关。
 - 当前开发环境的兼容端点只接受 `deepseek-flash` / `deepseek-v4-pro`；若日志出现 `The supported API model names are ...`，用 `MSD_AI_AGENT_MODEL=deepseek-flash` 或 `--msd.ai.agent.model=deepseek-flash` 启动。
@@ -388,6 +392,11 @@ TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
 curl -X POST "http://127.0.0.1:8000/api/agent/internal/ai/agent/chat" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"message":"查询短剧5001的详情并总结","sessionId":"demo-1"}'
+
+# 只验证路由决策，不消耗模型调用
+curl -X POST "http://127.0.0.1:8000/api/agent/internal/ai/agent/route" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"message":"第3集里他们为什么吵架","sessionId":"route-1"}'
 ```
 
 - 首次调用会初始化模型、工作区和 Redis 状态存储，耗时会明显高于后续调用。
@@ -425,6 +434,7 @@ curl -X POST http://127.0.0.1:8105/internal/ai/agent/audit/remote \
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/content/internal/ai/rag/recommend` | 经网关，需要登录；返回回答和最多 3 条来源 |
+| GET | `/api/content/internal/ai/rag/personalized` | 经网关，需要登录；首页「为你推荐」卡片，不调用 LLM |
 | POST | `/internal/ai/rag/reindex` | 直连 8107；全量重建 Milvus/ES 索引 |
 | GET | `/internal/ai/rag/status` | 直连 8107；Milvus/ES 可用性和最近索引结果 |
 
@@ -442,7 +452,9 @@ curl http://127.0.0.1:8107/internal/ai/rag/status
 
 - 索引：Milvus collection `msd_drama_rag_v1`，ES index `msd_drama_bm25_v1`。
 - 检索：两路各 Top 20，RRF k=60；Rerank 精排 Top 3。
-- 降级标记：`rewrite`、`vector`、`bm25`、`rerank`、`generation`、`timeout`；推荐接口始终返回 200 和可读兜底文案。
+- 多查询扩展：原查询 + 1 个 LLM 变体 + 可选偏好 query，跨查询 RRF 后再精排；关闭时保持单查询行为。
+- 个性化：interaction 聚合收藏/点赞/观看权重，content 结合目录分类/标签生成画像；首页卡片规则排序，不调用 LLM。
+- 降级标记：`rewrite`、`expansion`、`personalization`、`vector`、`bm25`、`rerank`、`generation`、`timeout`；推荐接口始终返回 200 和可读兜底文案。
 - `reindex`/`status` 不经网关，避免误操作。
 - Milvus 2.6.x 的 `common.storageType` 使用 `remote`；`minio` 已废弃，会导致写入 panic。
 - 完整架构、配置、验收和排障见 [docs/rag.md](docs/rag.md)。
@@ -521,23 +533,38 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 
 ### 互动计数（Outbox + Kafka）
 
-`msd-interaction` 在同一个本地事务里写互动明细和 `t_outbox_event`；`OutboxRelay` 每秒扫描待发送事件并投递 Kafka；`msd-drama` 的 `msd-drama-counter-v1` 消费组按 `event_id` 幂等更新短剧/剧集冗余计数。
+`msd-interaction` 在同一个本地事务里写互动明细和 `t_outbox_event`；`OutboxRelay` 短事务认领 200 条，事务外 8 线程并行投递 Kafka，`msd-drama` 和 `msd-interaction` 两个消费组按 `event_id` 幂等更新计数。
 
-- 投递状态：`0` 待发送、`1` 已发送、`2` 死信。失败按 `min(2^retry, 60)` 秒退避，超过 `msd.outbox.max-retry` 转死信。
+- 投递状态：`0` 待发送、`1` 已发送、`2` 死信；`claim_token + locked_until` 防止多实例重复发送，租约 60 秒。
+- 投递失败按 `min(2^retry, 60)` 秒退避，超过 `msd.outbox.max-retry` 转死信；发送更新均带 claim token 条件。
 - 消费幂等：`t_event_consume_log(consumer_group, event_id)` 唯一键拦截重复消息；消费日志和计数更新在同一个数据库事务内。
-- 失败处理：监听器重试 3 次（间隔 1 秒）后投递 `msd.interaction.dlq.v1`。
-- 最终一致：接口只等待明细和 outbox 落库，计数在 1-2 秒内异步更新；DLQ 或长期停机后用 `deploy/mysql/repair/rebuild_interaction_counts.sql` 对账。
-- 计数消费组首次启动从 latest 开始，避免重放历史事件。
+- 评论正文同步落库并返回 `commentId`，点赞数/回复数由 `msd-interaction-counter-v1` 异步派生；`clientRequestId` 保证重复提交只创建一条评论。
+- 最终一致：接口只等待明细和 outbox 落库，计数在 1-2 秒内异步更新；`GET /events/{eventId}` 查询 SENT/DEAD 和各消费组处理情况。
+- 失败处理：监听器重试 3 次（间隔 1 秒）后投递 `msd.interaction.dlq.v1`；压测用 `scripts/load-test-interaction.py`，对账用 `scripts/check-interaction-consistency.sql`。
 
 ```bash
-# 查看 outbox 投递状态
+# 查看 outbox 认领和投递状态
 mysql -h127.0.0.1 -umsd -p -D DL -e \
-  "SELECT id,topic,event_key,status,retry_count,last_error FROM t_outbox_event ORDER BY id DESC LIMIT 5"
+  "SELECT id,user_id,topic,event_key,status,retry_count,claim_token,locked_until,last_error FROM t_outbox_event ORDER BY id DESC LIMIT 5"
 
-# 查看消费组进度
+# 查看两个消费组进度
 D:/kafka_2.13-4.1.2/bin/windows/kafka-consumer-groups.bat \
-  --bootstrap-server 192.168.33.129:9092 --describe --group msd-drama-counter-v1
+  --bootstrap-server 127.0.0.1:9092 --describe --group msd-drama-counter-v1
+D:/kafka_2.13-4.1.2/bin/windows/kafka-consumer-groups.bat \
+  --bootstrap-server 127.0.0.1:9092 --describe --group msd-interaction-counter-v1
 ```
+
+## P4 联调与压测结果（2026-10-27）
+
+本地单机：Windows 11，MySQL/Redis/Kafka 本机，Nacos 容器；该轮 Milvus/ES 未启动。
+
+- 回归：`mvn -B -pl msd-content-service,msd-interaction,msd-drama,msd-agent-service -am test` 共 **101 tests、0 failures**；`npm --prefix frontend run build` 通过。全量 `package` 时 gateway 因运行中 jar 被占用失败，停止 gateway 后单独 repackage 成功。
+- 个性化：用户 1006 与 1003 返回不同推荐；未互动用户 9999 返回 `personalized=false, coldStart=true` 并回退热播；网关未登录 401，`/internal-source/**` 经网关 404。
+- 多查询：带 `X-User-Id` 时产生 3 条检索 query（原查询 + 变体 + 偏好），不带时 2 条；Milvus/ES 未启动时 `degradedFlags=["vector","bm25"]`，仍返回兜底文案而不报错。
+- 路由：COMPANION/AUDIT/DATA/SOCIAL 规则命中置信度 0.9–1.0，决策 2–10ms；重复消息走缓存约 1.6ms；伪造 `[ROUTE_HINT]` 被清洗，注入语句 400，无 `X-Internal-Token` 401；8106 AgentCard 200、无 token JSON-RPC 401、带 token 的注入请求 400。
+- 互动压测：2000 calls / 并发 50，**1999 成功、1 失败（0.05%）**，p50/p95/p99 = **21/73/128ms**，wall 1145ms；失败为 MySQL 死锁在 4 次重试后仍失败，低于 0.1% 目标。outbox pending=0，两个消费组 LAG=0。
+- 压测清理：416 条 `[load-test]` 评论通过删除接口清理，9 个测试短剧点赞取消；专用压测用户 9998 无残留点赞/评论。
+- 对账说明：本地演示 seed 的 like/favorite/comment 是合成基数，`check-interaction-consistency.sql` 会报告预期差异；生产数据或先重建计数后才有对账意义。
 
 ## 数据库初始化
 

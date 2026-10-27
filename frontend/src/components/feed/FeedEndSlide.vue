@@ -17,6 +17,7 @@ defineEmits(['home', 'replay'])
             class="end-bg"
             :seed="drama.id"
             :title="drama.title"
+            :src="drama.coverUrl"
             ratio="poster"
             :rounded="false"
         />

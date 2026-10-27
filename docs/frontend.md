@@ -1,6 +1,6 @@
 # 前端应用
 
-`frontend/` 是 Vue 3 + Vite 单页应用，移动优先，内容区最大宽度 480px。开发时通过 5173 端口访问，`/api` 代理到网关 8000；生产构建产物由网关静态托管。
+`frontend/` 是 Vue 3 + Vite 单页应用，响应式布局：窄屏保持 480px 移动壳，≥1024px 切换为桌面壳（左侧栏 + 顶部栏）。开发时通过 5173 端口访问，`/api` 代理到网关 8000；生产构建产物由网关静态托管。
 
 ## 1. 技术栈与运行
 
@@ -52,7 +52,7 @@ npm run build    # 输出 frontend/dist
 | 页面 | 接口 |
 |---|---|
 | 登录/注册 | `POST /api/user/auth/login`、`/register` |
-| 首页 | `GET /api/drama/internal/home` |
+| 首页 | `GET /api/drama/internal/home`、`GET /api/content/internal/ai/rag/personalized` |
 | 搜索/分类 | `GET /api/drama/internal/categories`、`GET /api/drama/internal/search/dramas` |
 | 短剧 Feed | `GET /api/drama/internal/dramas/{id}`、`GET /api/interaction/internal/interactions/dramas/{id}/state`、`GET /api/order/internal/orders/dramas/{id}/unlocks`、`GET /orders/points`、`GET /playback/episodes/{id}` |
 | 播放信息 | `GET /api/order/internal/playback/episodes/{id}` |
@@ -80,11 +80,11 @@ npm run build    # 输出 frontend/dist
 ## 4. 封面与视觉
 
 - `GradientCover.vue` 用 `dramaId`/`episodeId` 做 FNV-1a hash，映射为固定色相、角度、光斑和水印字，同一个对象每次渲染颜色一致。
-- 首页卡片、Banner、Feed 全屏背景、历史/收藏缩略图、播放器舞台全部使用渐变封面，**不渲染 `coverUrl` 图片**，因此 MinIO 未启动也不会出现破图。
+- 首页卡片、Banner、Feed 全屏背景、历史/收藏缩略图、播放器舞台统一使用 `GradientCover`：有 `coverUrl` 时渲染真实封面，为空或加载失败时回退渐变。MinIO 未启动只会退化成渐变封面，不会出现破图。
 - `UserAvatar` 优先加载 `avatarUrl`，失败或为空时回退昵称首字渐变头像。
-- 视觉沿用暗色 + 橙金品牌色；页面默认按 360–480px 设计，桌面居中单列。
+- 视觉沿用暗色 + 橙金品牌色；移动端按 360–480px 设计，桌面端使用侧栏 + 宽内容区，见第 8 节。
 
-## 5. 全屏 Feed 与占位播放器
+## 5. 全屏 Feed 与视频播放器
 
 - 点开短剧直接进入 `/drama/:dramaId` 全屏 Feed，首集自动播放；顶栏常驻返回、剧名和 `当前集/总集数`。
 - 每集一个全屏 slide，原生 `scroll-snap-type: y mandatory` 上下滑动切集；最后一集后是“已看完”结束卡，可返回首页或重看第 1 集。
@@ -93,10 +93,11 @@ npm run build    # 输出 frontend/dist
 - 点赞/收藏为抖音式动态按钮：点击激活时图标回弹、粒子与光环爆发、计数跳动；激活后点赞为红色实心爱心、收藏为金色实心星星，取消恢复白色描边。动画只由点击触发，加载已有互动状态不播放。
 - 简介/选集/评论均为底部弹层；评论弹层支持“本集 / 全剧”切换。打开弹层时暂停当前集并上报进度，关闭后恢复原播放状态。
 - `/watch/:episodeId` 只做 episode → dramaId 解析，然后渲染同一 Feed；新链接优先使用 `/drama/:dramaId?episode=`。
-- 不使用 `<video>`，不读取 `videoUrl`；播放画面是渐变舞台 + 中央播放按钮 + 底部进度控件。
+- 使用原生 `<video>` 播放播放接口返回的 `videoUrl`；未解锁时接口不下发地址，只展示解锁面板。
+- 视频默认静音自动播放，控制条提供静音切换；16:9 素材在竖屏舞台内等比显示，背景是同一封面模糊放大，避免拉伸或大面积黑边。
 - 时长来自播放接口的 `durationSeconds`（毫秒）；使用 `requestAnimationFrame` + 单调时间差推进，页面隐藏自动暂停。
 - 每个 slide 独立持有播放器和上报器；失活 slide 立即暂停并 flush，重新激活时恢复播放。
-- 未解锁不启动模拟播放，只展示价格、余额和解锁按钮；解锁成功后重新请求播放信息，确认 `unlocked=true` 才播放。
+- 未解锁不启动播放，只展示价格、余额和解锁按钮；解锁成功后重新请求播放信息，确认 `unlocked=true` 才播放。
 - 新用户没有积分账户时按钮禁用并提示；积分不足显示差额。
 
 ### 5.1 观看历史上报
@@ -115,10 +116,11 @@ npm run build    # 输出 frontend/dist
 - 弹层打开时 v-if + key 挂载 `CommentSection`，切集后重新打开会按新集请求，不会复用旧列表。
 - 根评论按时间倒序，每页 10 条；回复首次展开时才请求，按时间正序，每页 10 条。
 - 支持发布根评论、回复根评论、回复某条回复；服务端写入 `reply_to_user_id`，前端展示“回复 @昵称”。
-- 评论点赞走 `targetType=3`，本地乐观更新，失败回滚。
+- 评论点赞走 `targetType=3`，本地乐观更新；`useInteractionAck` 轮询事件状态，DEAD 时回滚。
 - 仅作者可删除；删根评论会级联删除回复，前端确认框会提示。
-- 发布/回复成功后本地插入新评论并同步根评论 `replyCount`，不整页刷新。
+- 发布/回复成功后本地插入新评论并同步根评论 `replyCount`，不整页刷新；每次提交生成 `clientRequestId`，失败重试复用。
 - 评论内容上限 1000 字，输入框实时计数。
+- 点赞/收藏/评论写成功后按 0/300/800/1500ms 轮询 `GET /events/{eventId}`；页面隐藏暂停，SENT 且已有消费组后拉取 `GET /dramas/{id}/stats` 校准计数，DEAD 回滚并提示。
 
 ## 7. 个人中心
 
@@ -129,7 +131,47 @@ npm run build    # 输出 frontend/dist
 - 收藏/点赞列表支持取消；观看历史支持删除单条和清空；我的评论支持删除。
 - `1003` 的基线统计为 `1/1/2/4`。
 
-## 8. 构建与网关托管
+## 8. 桌面端适配（≥1024）
+
+同一套路由和组件按视口切换布局；`--app-width: 480px` 继续服务移动壳、Feed、弹层和 Toast，桌面端不再全局放大。
+
+### 8.1 断点
+
+| 视口 | 布局 |
+|---|---|
+| < 1024 | 现行移动布局：底部 TabBar、底部弹层、480px 内容区 |
+| ≥ 1024 | 左侧栏 232px + 顶部栏 64px；隐藏 TabBar；`.app-main` 最宽 1360px |
+| ≥ 1280 | Feed 三栏；搜索/列表使用更宽网格 |
+
+- `useMediaQuery` 封装 `matchMedia`，JS 与 CSS 统一使用 1024 / 1280 两个断点。
+- 登录、注册、404 不加桌面壳；`/drama`、`/watch` 保持沉浸式全屏。
+
+### 8.2 桌面壳
+
+- `App.vue` 在 `isDesktop && !route.meta.public && !route.meta.immersive` 时渲染 `DesktopSidebar` 和 `DesktopTopbar`。
+- 侧栏分组：主导航（首页/发现/追剧/我的）、我的内容（收藏/点赞/我的评论/已解锁/充值）、工作台（按角色显示创作者中心/审核台/评论治理）和底部用户卡。
+- 顶部栏显示页面标题、全局搜索（跳 `/search?keyword=`）和头像；页面内 `PageHeader` 在桌面隐藏标题，只保留副标题和页面操作。
+- 侧栏入口只做前端隐藏，后端仍做最终角色校验。
+
+### 8.3 页面
+
+- 首页：Banner 与“继续观看”双列，分类 chips 换行，热播/最新改为自适应网格；「为你推荐」异步加载，仅在后端返回 `personalized=true` 时展示，分类筛选激活时隐藏。
+- 搜索：左侧 240px 筛选栏（分类 + 排序）+ 右侧结果网格；顶部栏和页面搜索框都同步 `keyword` 查询参数。
+- Feed：1024 为 480px 竖屏 + 340px 工作区；1280 增加 280px 信息栏。工作区 tab 为选集/评论/AI 伴看，复用 `EpisodeRail`、`CommentSection`、`CompanionChat`。
+- 个人中心：340px 资料栏 + 内容区，菜单两列。
+- 收藏/点赞：海报网格；历史/评论/已解锁：≥1280 双列。
+- 充值：≥1280 左侧充值 + 右侧积分流水。
+- 创作者/审核/评论治理：一行一条的记录布局；审核弹层使用 `size="lg"`。
+- 登录/注册：左侧品牌介绍 + 右侧表单。
+
+### 8.4 弹层与实例
+
+- `AppModal` 新增 `size` prop：`md` 480px、`lg` 720px；桌面居中显示。
+- Feed 的底部弹层只在移动端渲染（`v-if`），桌面使用常驻工作区，保证评论/伴看只有一份实例。
+- 桌面切集只滚动 Feed，不关闭工作区；切到未解锁集会从伴看退回选集并提示。
+- 桌面工作区不暂停播放；移动端弹层仍会暂停并上报进度。
+
+## 9. 构建与网关托管
 
 开发：
 
@@ -154,19 +196,19 @@ java -jar msd-gateway/target/msd-gateway-1.0.0-SNAPSHOT.jar
 - 静态资源请求不经过网关 JWT 过滤器（过滤器只作用于命中的 `/api` 路由），页面本身可以在登录前加载。
 - 接口 401 仍由网关返回统一 JSON，前端收到后跳登录。
 
-## 9. 已知限制
+## 10. 已知限制
 
 - 没有真实视频播放、封面图片、视频签名 URL；MinIO 未启动不影响页面。
 - Feed 只在本剧剧集间上下滑动，不跨短剧连播；最后一集后进入结束卡。
-- 搜索使用 MySQL LIKE，数据量上来后需要改 FULLTEXT/ES；不做个性化推荐、搜索历史、热词、拼音纠错和语义搜索。
+- 搜索使用 MySQL LIKE，数据量上来后需要改 FULLTEXT/ES；首页已接个性化推荐，搜索页不做搜索历史、热词、拼音纠错和语义搜索。
 - 首页分类 chips 仍只筛选已加载的热播/最新内容；完整分类浏览在 `/search`。
 - 充值中心、积分流水、已解锁列表、创作者工作台、审核台和评论治理已接入；没有头像上传、退款；新用户充值支付时自动创建积分账户。
 - 没有评论编辑、审核、敏感词、点赞列表。
-- Kafka 未启动时短剧/剧集/评论冗余计数会滞后，页面展示接口返回值，不自行重算。
+- Kafka 未启动时短剧/剧集/评论冗余计数会滞后；前端先展示乐观值，再用事件状态轮询和 drama stats 校准，事件 DEAD 时回滚。
 - 列表不做 KeepAlive，返回列表会重新请求第一页。
 - 不引入 ESLint、单测、E2E 框架；构建通过 + 手工/无头浏览器验收。
 
-## 10. 验收记录（2026-10-24，Feed 改造）
+## 11. 验收记录（2026-10-24，Feed 改造）
 
 环境：MySQL、Nacos、Seata、msd-user 8101、msd-drama 8102、msd-order 8103、msd-interaction 8104、msd-gateway 8000；Kafka/Redis 已恢复可达；Vite 5173。
 
@@ -191,3 +233,58 @@ java -jar msd-gateway/target/msd-gateway-1.0.0-SNAPSHOT.jar
 | 控制台 | 无运行时异常、无接口错误日志 |
 
 验收产生的临时用户、积分账户、解锁、历史已清理，测试用户对剧集播放/浏览计数的增量已回退。1003 的当前余额/解锁/评论以数据库为准（验收期间可能有人工操作，未强制回滚）。
+
+## 12. 验收记录（2026-10-26，桌面端适配）
+
+环境：Vite 5173、网关 8000 及各业务服务已启动；用无头 Chrome 按视口截图并读取 `document.documentElement.scrollWidth`。
+
+| 用例 | 结果 |
+|---|---|
+| `npm run build` | 通过，产物在 `frontend/dist` |
+| 1440 / 1280 / 1024 / 768 / 390 | `scrollWidth === innerWidth`，无横向溢出 |
+| 桌面壳 | 1440 显示侧栏 + 顶部栏，TabBar 隐藏；`/me`、`/search` 的 PageHeader 不渲染 |
+| 移动回归 390 / 768 | 底部 TabBar、480px 内容区、页面标题和底部弹层保持原样 |
+| 首页 1440 | Banner 与继续观看双列；热播 6 列网格；分类 chips 换行 |
+| 首页 1024 | 主内容 792px，Banner 与继续观看仍为双列 |
+| 搜索 1440 | 左侧筛选栏 + 5 列结果网格；`keyword=盛夏` 命中 5101 |
+| Feed 1440 | `grid-template-columns = 280px 700px 340px`，stage 480px，信息栏和工作区均渲染 |
+| Feed 1280 | `grid-template-columns = 280px 660px 340px` |
+| Feed 1024 | `grid-template-columns = 684px 340px`，信息栏隐藏 |
+| Feed 390 | `grid-template-columns = none`，单列全屏，无工作区 |
+| 工作区切集 | 点击第 3 集后 `scrollTop=1800`（900×2），active slide index=2，工作区不关闭 |
+| 伴看锁定回退 | 伴看 tab 下滚到第 4 集（锁定）→ 自动回到选集并提示“解锁本集后可使用伴看” |
+| 桌面转移动 | 1440 打开评论后缩到 390：工作区卸载、无残留弹层，`body.overflow=hidden` |
+| 移动评论 | 390 点击评论按钮打开弹层，页面内只有 1 个 `CommentSection` |
+| 个人中心 1440 | 左侧 340px 资料栏 + 右侧统计和两列菜单 |
+| 收藏 1440 | 5 列海报网格；历史/评论 ≥1280 双列 |
+| 充值 1440 | 双列，右侧积分流水 |
+| 创作者 1440 | 一行一条；编辑页 `app-main` 宽 1000，字段两列、剧集五列、操作条吸底 |
+| 审核台 / 评论治理 1440 | 一行一条记录，操作列右对齐；审核弹层 `size="lg"` |
+| 登录 1440 | 左侧品牌卡 + 右侧表单分栏，品牌卖点和页脚显示 |
+| 角色入口 | 1003 无工作台；1002 仅创作者中心；1001 显示创作者中心、审核台、评论治理 |
+
+## 13. 验收记录（2026-10-26，真实封面与视频）
+
+| 用例 | 结果 |
+|---|---|
+| MinIO 封面 | 9 张，`msd/covers/ai/5101-5109.jpg`，匿名 GET 返回 200 `image/jpeg` |
+| MinIO 视频 | 54 段，`msd/videos/ai/5101-01.mp4 ... 5109-06.mp4`，匿名 GET 返回 200 `video/mp4` |
+| 首页 1440 | 14 个 `.cover-image` 全部加载成功（Banner、继续观看、热播 6、最新 6） |
+| 搜索 390 | 命中结果封面加载成功 |
+| Feed 1440 | 信息栏封面加载成功；`<video>` 自动播放，`currentTime` 持续增长 |
+| 切换剧集 | 第 2 集 `video.currentSrc` 变为 `5101-02.mp4`，继续播放 |
+| 静音切换 | 点击控制条静音按钮后 `video.muted=false`，播放不中断 |
+| 播放结束 | 第 1 集 23 秒结束，`ended=true`，显示“本集完”面板 |
+| 锁定剧集 | 第 3 集只显示解锁面板，不创建 `<video>` |
+| 观看历史 | 播放位置按 5 秒节奏上报，切集时补报 |
+| 封面/视频缺失 | 封面回退渐变，视频回退封面占位并保留控制条，不出现破图 |
+
+## 14. P4 联调（2026-10-27）
+
+| 用例 | 结果 |
+|---|---|
+| 生产构建 | `npm --prefix frontend run build` 通过，157 modules |
+| 首页「为你推荐」网关接口 | 登录用户返回 `personalized=true` 卡片；未登录 401 |
+| 冷启动用户 | 返回 `personalized=false, coldStart=true`，前端隐藏推荐区块并保留热播 |
+| 互动 ack 接口 | 点赞/评论事件返回 `SENT`，`consumedGroups` 同时包含 drama 和 interaction 消费组 |
+| 网关内部接口隔离 | `/api/interaction/internal-source/**` 返回 404 |

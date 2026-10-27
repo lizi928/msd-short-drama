@@ -48,9 +48,9 @@ docker build -f deploy/docker/Dockerfile.service \
 
 | 项 | 原因 / 后续 |
 |---|---|
-| 真实视频、封面、转码、CDN、签名 URL、防盗链 | 需要对象存储、转码服务和播放器；当前使用占位播放器 |
+| 真实视频、封面、转码、CDN、签名 URL、防盗链 | 需要对象存储、转码服务和播放器；当前使用本地 MinIO 短片 + 原生 `<video>` |
 | 真实支付（微信/支付宝）、回调验签、退款、对账 | 需要商户资质、证书和回调域名 |
-| Spring Security + RBAC 持久化、操作审计、内部 token/mTLS | 当前只有网关 JWT + 服务内 header 校验 |
+| Spring Security + RBAC 持久化、操作审计、全服务 mTLS | 当前为网关 JWT；Agent/Audit 已加 `X-Internal-Token`，其余服务仍靠服务内 header 与内网隔离 |
 | VIP/订阅、优惠券、积分过期、防刷 | 产品功能，未排期 |
 | RAG Kafka 增量索引 | 当前只做全量重建；可由 `DRAMA_CHANGED` 事件驱动 |
 | 搜索上量 | 当前 MySQL LIKE；数据量上来后改 FULLTEXT ngram、ES 或独立搜索服务 |
@@ -59,7 +59,7 @@ docker build -f deploy/docker/Dockerfile.service \
 
 ## 3. 上线前最低检查
 
-1. 更换所有默认密码、JWT 密钥和 Nacos token，`deploy/.env` 不进入镜像。
+1. 更换所有默认密码、JWT 密钥和 Nacos token，设置 `MSD_INTERNAL_TOKEN`，`deploy/.env` 不进入镜像。
 2. 网关只暴露 8000；`/internal-source/**`、`/internal/**` 只允许内网。
 3. 为 MySQL、Redis、Kafka、Nacos、Milvus、ES 配置认证和备份。
 4. 配置 HTTPS、CORS 白名单和网关限流。

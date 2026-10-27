@@ -14,6 +14,11 @@ const props = defineProps({
     closeOnBackdrop: {
         type: Boolean,
         default: true
+    },
+    // 桌面端宽度档位：md 480px，lg 720px；移动端始终是底部 sheet
+    size: {
+        type: String,
+        default: 'md'
     }
 })
 
@@ -64,7 +69,7 @@ onBeforeUnmount(() => {
         <Transition name="modal">
             <div v-if="modelValue" class="modal-root" role="dialog" aria-modal="true" :aria-label="title">
                 <div class="modal-backdrop" @click="closeOnBackdrop && close()"></div>
-                <section class="modal-panel">
+                <section class="modal-panel" :class="`is-${size}`">
                     <header class="modal-head">
                         <h2>{{ title }}</h2>
                         <button class="modal-close" type="button" aria-label="关闭" @click="close">
@@ -184,6 +189,16 @@ onBeforeUnmount(() => {
     .modal-panel {
         border-radius: 24px;
         padding-bottom: 18px;
+    }
+}
+
+@media (min-width: 1024px) {
+    .modal-panel {
+        max-height: 82dvh;
+    }
+
+    .modal-panel.is-lg {
+        width: min(100%, 720px);
     }
 }
 

@@ -14,6 +14,15 @@ import java.util.List;
 public interface CommentMapper extends BaseMapper<Comment> {
 
     /**
+     * 按用户和客户端请求幂等键查询已创建的评论。
+     */
+    @Select("SELECT id, drama_id, episode_id, user_id, root_id, parent_id, reply_to_user_id, "
+            + "content, client_request_id, like_count, reply_count, status, create_time, update_time "
+            + "FROM t_comment WHERE user_id = #{userId} AND client_request_id = #{clientRequestId}")
+    Comment selectByClientRequestId(@Param("userId") Long userId,
+                                    @Param("clientRequestId") String clientRequestId);
+
+    /**
      * 回复数加一，只更新可见的根评论。
      */
     @Update("UPDATE t_comment SET reply_count = reply_count + 1 "

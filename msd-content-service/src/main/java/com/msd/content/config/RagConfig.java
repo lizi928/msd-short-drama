@@ -3,9 +3,12 @@ package com.msd.content.config;
 import com.msd.content.rag.DashScopeRerankPostProcessor;
 import com.msd.content.rag.ElasticsearchBm25Store;
 import com.msd.content.rag.HybridRetriever;
+import com.msd.content.rag.LlmMultiQueryExpander;
 import com.msd.content.rag.LlmQueryTransformer;
+import com.msd.content.rag.RrfDocumentJoiner;
 import com.msd.content.rag.RrfMerger;
 import com.msd.content.service.RagRecommendationService;
+import com.msd.content.service.UserPreferenceService;
 import com.msd.content.support.LazyMilvusStoreProvider;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.PromptTemplate;
@@ -74,6 +77,16 @@ public class RagConfig {
     }
 
     /**
+     * 多查询扩展专用 ChatClient，使用独立提示，避免复用单行改写器。
+     */
+    @Bean("expandChatClient")
+    public ChatClient expandChatClient(ChatClient.Builder chatClientBuilder) {
+        return chatClientBuilder.clone()
+                .defaultSystem(LlmMultiQueryExpander.SYSTEM_PROMPT)
+                .build();
+    }
+
+    /**
      * 推荐 ChatClient，默认挂 RetrievalAugmentationAdvisor。
      */
     @Bean("ragChatClient")
@@ -94,6 +107,25 @@ public class RagConfig {
             RagProperties properties,
             @Qualifier("ragRewriteExecutor") ThreadPoolTaskExecutor rewriteExecutor) {
         return new LlmQueryTransformer(rewriteChatClient, properties, rewriteExecutor);
+    }
+
+    /**
+     * 多查询扩展器。
+     */
+    @Bean
+    public LlmMultiQueryExpander llmMultiQueryExpander(
+            @Qualifier("expandChatClient") ChatClient expandChatClient,
+            RagProperties properties,
+            @Qualifier("ragRewriteExecutor") ThreadPoolTaskExecutor rewriteExecutor) {
+        return new LlmMultiQueryExpander(expandChatClient, properties, rewriteExecutor);
+    }
+
+    /**
+     * 跨查询 RRF 融合器。
+     */
+    @Bean
+    public RrfDocumentJoiner rrfDocumentJoiner(RagProperties properties) {
+        return new RrfDocumentJoiner(properties);
     }
 
     /**
@@ -139,18 +171,25 @@ public class RagConfig {
     public RetrievalAugmentationAdvisor retrievalAugmentationAdvisor(
             RagProperties properties,
             LlmQueryTransformer queryTransformer,
+            LlmMultiQueryExpander multiQueryExpander,
+            RrfDocumentJoiner documentJoiner,
             HybridRetriever hybridRetriever,
             DashScopeRerankPostProcessor rerankPostProcessor,
             @Qualifier("ragAdvisorExecutor") ThreadPoolTaskExecutor advisorExecutor) {
-        // 1. 组装检索、精排、上下文增强和执行线程池
+        // 1. 组装检索、跨查询融合、精排、上下文增强和执行线程池
         RetrievalAugmentationAdvisor.Builder builder = RetrievalAugmentationAdvisor.builder()
                 .documentRetriever(hybridRetriever)
+                .documentJoiner(documentJoiner)
                 .documentPostProcessors(rerankPostProcessor)
                 .queryAugmenter(contextualQueryAugmenter())
                 .taskExecutor(advisorExecutor);
         // 2. 仅在改写开启时挂载 query transformer
         if (properties.getRewrite().isEnabled()) {
             builder.queryTransformers(queryTransformer);
+        }
+        // 3. 仅在多查询开启时挂载 query expander
+        if (properties.getExpansion().isEnabled()) {
+            builder.queryExpander(multiQueryExpander);
         }
         return builder.build();
     }
@@ -161,8 +200,9 @@ public class RagConfig {
     @Bean
     public RagRecommendationService ragRecommendationService(
             @Qualifier("ragChatClient") ChatClient ragChatClient,
-            RagProperties properties) {
-        return new RagRecommendationService(ragChatClient, properties);
+            RagProperties properties,
+            UserPreferenceService preferenceService) {
+        return new RagRecommendationService(ragChatClient, properties, preferenceService);
     }
 
     /**

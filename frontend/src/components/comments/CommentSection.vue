@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { createComment, deleteComment, fetchComments } from '../../api/interaction'
+import { useInteractionAck } from '../../composables/useInteractionAck'
 import { useAuthStore } from '../../stores/auth'
 import { useToastStore } from '../../stores/toast'
 import { usePagedList } from '../../composables/usePagedList'
@@ -62,8 +63,10 @@ const {
 
 const composerRef = ref(null)
 const submitting = ref(false)
+const pendingRequestId = ref('')
 const deleteTarget = ref(null)
 const deleting = ref(false)
+const ack = useInteractionAck()
 
 const confirmVisible = computed({
     get: () => Boolean(deleteTarget.value),
@@ -81,6 +84,16 @@ const deleteMessage = computed(() => (
 ))
 
 /**
+ * 生成评论请求幂等键；重试时复用，避免重复评论。
+ */
+function newRequestId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID()
+    }
+    return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+/**
  * 发布根评论后本地插入，避免整页刷新。
  */
 async function submitRoot(content) {
@@ -88,12 +101,17 @@ async function submitRoot(content) {
         return
     }
     submitting.value = true
+    if (!pendingRequestId.value) {
+        pendingRequestId.value = newRequestId()
+    }
     try {
         const result = await createComment({
             dramaId: Number(props.dramaId),
             episodeId: props.episodeId === null ? undefined : Number(props.episodeId),
-            content
+            content,
+            clientRequestId: pendingRequestId.value
         })
+        pendingRequestId.value = ''
         prepend({
             commentId: result.commentId,
             dramaId: Number(props.dramaId),
@@ -111,6 +129,14 @@ async function submitRoot(content) {
             liked: false,
             createTime: new Date().toISOString()
         })
+        if (result.eventId) {
+            ack.track(result.eventId, {
+                onDead: () => {
+                    remove(result.commentId)
+                    toast.push('评论同步失败，已移除本地评论')
+                }
+            })
+        }
         composerRef.value?.clear()
         toast.success('评论已发布')
     } catch (cause) {

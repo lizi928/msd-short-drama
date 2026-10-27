@@ -81,6 +81,24 @@ function onClickCapture(event) {
     }
 }
 
+/**
+ * 桌面端支持左右方向键切换，焦点需落在轮播区域内。
+ */
+function onKeydown(event) {
+    if (!canAuto.value) {
+        return
+    }
+    if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        go(current.value - 1)
+        return
+    }
+    if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        go(current.value + 1)
+    }
+}
+
 watch(() => normalized.value.length, () => {
     current.value = 0
     startAuto()
@@ -94,9 +112,11 @@ onBeforeUnmount(stopAuto)
     <section
         v-if="banner"
         class="banner"
+        tabindex="0"
         @touchstart.passive="onTouchStart"
         @touchend.passive="onTouchEnd"
         @click.capture="onClickCapture"
+        @keydown="onKeydown"
         @pointerenter="stopAuto"
         @pointerleave="startAuto"
     >
@@ -106,7 +126,8 @@ onBeforeUnmount(stopAuto)
                 class="banner-slide"
                 :to="`/drama/${banner.dramaId}`"
             >
-                <GradientCover :seed="banner.dramaId" :title="banner.title" ratio="wide" :rounded="false">
+                <GradientCover :seed="banner.dramaId" :title="banner.title" :src="banner.coverUrl"
+                               ratio="wide" :rounded="false">
                     <span class="banner-scrim" aria-hidden="true"></span>
                     <span class="banner-copy">
                         <span class="banner-eyebrow">正在热播</span>
@@ -116,6 +137,21 @@ onBeforeUnmount(stopAuto)
                 </GradientCover>
             </RouterLink>
         </Transition>
+
+        <template v-if="canAuto">
+            <button class="banner-arrow is-prev" type="button" aria-label="上一张" @click.stop="go(current - 1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M15 5l-7 7 7 7"/>
+                </svg>
+            </button>
+            <button class="banner-arrow is-next" type="button" aria-label="下一张" @click.stop="go(current + 1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M9 5l7 7-7 7"/>
+                </svg>
+            </button>
+        </template>
 
         <div v-if="normalized.length > 1" class="banner-dots">
             <button
@@ -143,6 +179,11 @@ onBeforeUnmount(stopAuto)
 .banner-slide {
     display: block;
     color: #fff;
+}
+
+/* 真实海报是竖版，横幅裁切时优先保留上半部分人物 */
+.banner :deep(.cover-image) {
+    object-position: center 24%;
 }
 
 .banner-scrim {
@@ -207,6 +248,72 @@ onBeforeUnmount(stopAuto)
 .banner-dot.is-active {
     width: 16px;
     background: var(--brand-2);
+}
+
+/* 箭头只在桌面端出现，移动端继续用滑动和圆点 */
+.banner-arrow {
+    position: absolute;
+    top: 50%;
+    z-index: 2;
+    display: none;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 50%;
+    background: rgba(9, 11, 16, 0.55);
+    color: #fff;
+    opacity: 0;
+    transform: translateY(-50%);
+    transition: opacity 160ms ease, background 160ms ease;
+}
+
+.banner:hover .banner-arrow,
+.banner:focus-within .banner-arrow {
+    opacity: 1;
+}
+
+.banner-arrow:hover {
+    background: rgba(9, 11, 16, 0.8);
+}
+
+.banner-arrow svg {
+    width: 16px;
+    height: 16px;
+}
+
+.banner-arrow.is-prev {
+    left: 12px;
+}
+
+.banner-arrow.is-next {
+    right: 12px;
+}
+
+@media (min-width: 1024px) {
+    .banner-arrow {
+        display: grid;
+    }
+
+    .banner-copy {
+        right: 24px;
+        bottom: 24px;
+        left: 24px;
+    }
+
+    .banner-copy strong {
+        font-size: 26px;
+    }
+
+    .banner-subtitle {
+        font-size: 13px;
+    }
+
+    .banner-dots {
+        right: 20px;
+        bottom: 18px;
+    }
 }
 
 .banner-fade-enter-active,

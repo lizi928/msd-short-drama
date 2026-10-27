@@ -15,6 +15,13 @@
     --shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
     --app-width: 480px;
     --tabbar-height: 64px;
+    /* 桌面壳尺寸；--app-width 仍只服务移动布局、Feed、Modal 和 Toast */
+    --sidebar-width: 232px;
+    --topbar-height: 64px;
+    --content-max: 1360px;
+    --shell-gutter: clamp(20px, 2.5vw, 40px);
+    --feed-info-width: 280px;
+    --feed-workspace-width: 340px;
 }
 
 * {
@@ -607,6 +614,121 @@ button:focus-visible {
     color: var(--muted);
     font-size: 12px;
     line-height: 1.7;
+}
+
+/* ---------- 桌面端（≥1024）应用壳 ---------- */
+
+@media (min-width: 1024px) {
+    /* 登录、注册和 404 不使用 480px 移动壳 */
+    .app-frame.is-public {
+        width: 100%;
+        max-width: none;
+        border: 0;
+        box-shadow: none;
+    }
+
+    .app-root.has-chrome .app-main {
+        width: 100%;
+        max-width: var(--content-max);
+        margin: 0 auto;
+        padding: 24px var(--shell-gutter) 48px;
+    }
+
+    /* 表单类页面在宽屏上限宽，避免输入框拉得过长 */
+    .app-root.has-chrome .app-main.is-narrow {
+        max-width: 1000px;
+    }
+
+    .app-root.has-chrome .tab-page,
+    .app-root.has-chrome .sub-page {
+        min-height: calc(100dvh - var(--topbar-height));
+    }
+
+    /* 桌面 Toast 固定在右下角，不再跟随移动端底部导航让位 */
+    .toast-stack {
+        right: 28px;
+        bottom: 28px;
+        left: auto;
+        width: 360px;
+        transform: none;
+    }
+
+    .toast-stack.is-tab,
+    .toast-stack.is-feed {
+        bottom: 28px;
+    }
+
+    /* 登录/注册：左侧品牌介绍，右侧表单 */
+    .auth-page {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(380px, 440px);
+        align-items: center;
+        gap: clamp(32px, 4vw, 64px);
+        max-width: 1120px;
+        min-height: 100dvh;
+        padding: 40px var(--shell-gutter);
+    }
+
+    .auth-brand {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 520px;
+        padding: 44px 40px;
+    }
+
+    .brand-copy h1 {
+        font-size: 34px;
+    }
+
+    .brand-copy p {
+        max-width: 420px;
+        font-size: 14px;
+    }
+
+    .brand-points {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 10px;
+        margin-top: 30px;
+    }
+
+    .brand-points li {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        color: var(--text);
+        font-size: 13px;
+    }
+
+    .brand-points span {
+        color: var(--brand-2);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+    }
+
+    .brand-foot {
+        position: relative;
+        z-index: 1;
+        display: block;
+        margin-top: 34px;
+        color: rgba(255, 255, 255, 0.28);
+        font-size: 11px;
+    }
+
+    .auth-side {
+        align-self: center;
+    }
+
+    .auth-card {
+        padding: 30px 28px;
+    }
+
+    .auth-head h2 {
+        font-size: 26px;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {

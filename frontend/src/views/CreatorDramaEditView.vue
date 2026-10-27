@@ -207,7 +207,7 @@ load()
             back-to="/creator/dramas"
         />
 
-        <main class="app-main edit-page">
+        <main class="app-main edit-page is-narrow">
             <div v-if="loading" class="edit-skeleton">
                 <SkeletonBlock height="180px" radius="16px"/>
                 <SkeletonBlock height="220px" radius="16px"/>
@@ -434,6 +434,71 @@ load()
 
     .episode-title {
         grid-column: span 2;
+    }
+}
+
+/* ---------- 桌面端（≥1024）：表单两列，剧集单行编辑 ---------- */
+
+@media (min-width: 1024px) {
+    .edit-page {
+        gap: 18px;
+    }
+
+    .form-card {
+        gap: 16px;
+        padding: 22px 24px;
+    }
+
+    .form-card h2 {
+        font-size: 16px;
+    }
+
+    .field-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px 16px;
+    }
+
+    .field-wide {
+        grid-column: 1 / -1;
+    }
+
+    .episode-row {
+        padding: 14px 16px;
+    }
+
+    .episode-fields {
+        grid-template-columns: 88px minmax(0, 1fr) 118px 108px 96px;
+        align-items: end;
+    }
+
+    .episode-title {
+        grid-column: auto;
+    }
+
+    .episode-head {
+        font-size: 12px;
+    }
+
+    .text-btn {
+        font-size: 12px;
+    }
+
+    /* 保存操作固定在视口底部，长表单不用滚回底部 */
+    .edit-actions {
+        position: sticky;
+        bottom: 0;
+        z-index: 20;
+        grid-template-columns: auto auto;
+        justify-content: end;
+        gap: 12px;
+        padding: 14px 0;
+        background: linear-gradient(180deg, transparent, rgba(9, 11, 16, 0.88) 42%);
+    }
+
+    .edit-actions .btn {
+        width: auto;
+        min-width: 160px;
+        padding: 0 22px;
     }
 }
 </style>

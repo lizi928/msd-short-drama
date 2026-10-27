@@ -12,7 +12,7 @@ defineProps({
 
 <template>
     <RouterLink class="drama-card" :to="`/drama/${drama.dramaId}`">
-        <GradientCover :seed="drama.dramaId" :title="drama.title" ratio="poster">
+        <GradientCover :seed="drama.dramaId" :title="drama.title" :src="drama.coverUrl" ratio="poster">
             <span v-if="drama.categoryName" class="card-chip">{{ drama.categoryName }}</span>
             <span class="card-episodes">{{ drama.episodeCount }} 集</span>
         </GradientCover>

@@ -155,7 +155,8 @@ async function confirmAction() {
                             @click="resume(item)"
                         >
                             <span class="history-cover">
-                                <GradientCover :seed="item.dramaId" :title="item.dramaTitle" ratio="thumb"/>
+                                <GradientCover :seed="item.dramaId" :title="item.dramaTitle"
+                                               :src="item.dramaCoverUrl" ratio="thumb"/>
                                 <span class="play-mark" aria-hidden="true">
                                     <svg viewBox="0 0 24 24" fill="currentColor">
                                         <path d="M8 5.5v13l11-6.5z"/>
@@ -374,5 +375,56 @@ async function confirmAction() {
 .remove-btn svg {
     width: 14px;
     height: 14px;
+}
+
+/* ---------- 桌面端（≥1024） ---------- */
+
+@media (min-width: 1024px) {
+    .history-list {
+        max-width: 900px;
+        gap: 12px;
+    }
+
+    .history-item {
+        padding: 14px 16px;
+    }
+
+    .history-main {
+        gap: 16px;
+    }
+
+    .history-cover {
+        width: 96px;
+    }
+
+    .history-head strong {
+        font-size: 15px;
+    }
+
+    .episode {
+        font-size: 12px;
+    }
+
+    .meta {
+        font-size: 11px;
+    }
+
+    .remove-btn {
+        width: 36px;
+        height: 36px;
+    }
+
+    .remove-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+}
+
+/* 宽屏改为双列，减少长列表纵向滚动 */
+@media (min-width: 1280px) {
+    .history-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        max-width: none;
+    }
 }
 </style>

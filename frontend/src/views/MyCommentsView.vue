@@ -252,4 +252,35 @@ async function confirmDelete() {
     color: rgba(255, 107, 107, 0.72);
     font-size: 11px;
 }
+
+/* ---------- 桌面端（≥1024） ---------- */
+
+@media (min-width: 1024px) {
+    .comment-list {
+        max-width: 900px;
+        gap: 12px;
+    }
+
+    .my-comment {
+        padding: 16px 18px;
+    }
+
+    .comment-content {
+        font-size: 14px;
+    }
+
+    .delete-btn {
+        padding: 6px 10px;
+        border: 1px solid rgba(255, 107, 107, 0.28);
+        border-radius: 9px;
+        font-size: 12px;
+    }
+}
+
+@media (min-width: 1280px) {
+    .comment-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        max-width: none;
+    }
+}
 </style>

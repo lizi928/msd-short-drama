@@ -11,10 +11,27 @@ const props = defineProps({
     unlockedIds: {
         type: Set,
         default: () => new Set()
+    },
+    // rail 为移动端横向条，panel 为桌面侧栏纵向列表
+    variant: {
+        type: String,
+        default: 'rail'
     }
 })
 
 defineEmits(['select'])
+
+/**
+ * 标题本身常以“第N集”开头，和左侧集号重复时去掉前缀。
+ */
+function displayName(episode) {
+    const title = String(episode.title || '').trim()
+    const prefix = `第${episode.episodeNo}集`
+    if (title.startsWith(prefix)) {
+        return title.slice(prefix.length).trim() || prefix
+    }
+    return title || prefix
+}
 
 /**
  * 剧集角标：免费 / 已解锁 / 积分解锁。
@@ -31,7 +48,7 @@ function badge(episode) {
 </script>
 
 <template>
-    <div v-if="episodes.length" class="episode-rail" aria-label="选集">
+    <div v-if="episodes.length" class="episode-rail" :class="`is-${variant}`" aria-label="选集">
         <button
             v-for="episode in episodes"
             :key="episode.episodeId"
@@ -44,7 +61,7 @@ function badge(episode) {
             @click="$emit('select', episode.episodeId)"
         >
             <span class="rail-no">第{{ episode.episodeNo }}集</span>
-            <span class="rail-name">{{ episode.title }}</span>
+            <span class="rail-name">{{ displayName(episode) }}</span>
             <span class="rail-badge">{{ badge(episode) }}</span>
         </button>
     </div>
@@ -107,5 +124,31 @@ function badge(episode) {
 
 .rail-item.is-active .rail-badge {
     color: var(--brand-2);
+}
+
+/* ---------- 桌面侧栏纵向列表 ---------- */
+
+.episode-rail.is-panel {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+}
+
+.is-panel .rail-item {
+    grid-template-columns: 46px minmax(0, 1fr) auto;
+    align-items: center;
+    width: 100%;
+    gap: 9px;
+    padding: 9px 11px;
+}
+
+.is-panel .rail-name {
+    font-size: 12px;
+}
+
+.is-panel .rail-badge {
+    font-size: 10px;
 }
 </style>

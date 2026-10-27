@@ -1,7 +1,7 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { fetchDramaDetail } from '../../api/drama'
+import { fetchDramaDetail, fetchDramaStats } from '../../api/drama'
 import {
     favoriteDrama,
     fetchDramaState,
@@ -11,6 +11,8 @@ import {
 } from '../../api/interaction'
 import { fetchDramaUnlocks, fetchPoints } from '../../api/order'
 import { lockBodyScroll, unlockBodyScroll } from '../../composables/useBodyScrollLock'
+import { useInteractionAck } from '../../composables/useInteractionAck'
+import { useMediaQuery } from '../../composables/useMediaQuery'
 import { useToastStore } from '../../stores/toast'
 import AppModal from '../AppModal.vue'
 import CommentSection from '../comments/CommentSection.vue'
@@ -19,7 +21,9 @@ import ErrorState from '../ErrorState.vue'
 import DramaInfoSheet from './DramaInfoSheet.vue'
 import EpisodeSheet from './EpisodeSheet.vue'
 import FeedEndSlide from './FeedEndSlide.vue'
+import FeedInfoPanel from './FeedInfoPanel.vue'
 import FeedSlide from './FeedSlide.vue'
+import FeedWorkspace from './FeedWorkspace.vue'
 
 const props = defineProps({
     dramaId: {
@@ -61,8 +65,16 @@ const episodesOpen = ref(false)
 const commentsOpen = ref(false)
 const companionOpen = ref(false)
 const commentsScope = ref('episode')
+const workspaceTab = ref('episodes')
+
+// 1. 桌面端断点：1024 起显示右侧工作区，1280 起额外显示左侧信息栏
+const isDesktop = useMediaQuery('(min-width: 1024px)')
+const isWide = useMediaQuery('(min-width: 1280px)')
 
 const pending = reactive({ like: false, favorite: false })
+const likeAckId = ref('')
+const favoriteAckId = ref('')
+const ack = useInteractionAck()
 const scroller = ref(null)
 
 let slideObserver = null
@@ -283,8 +295,34 @@ function selectEpisode(episodeId) {
     if (index < 0) {
         return
     }
+    // 1. 桌面端工作区常驻，切集只滚动 Feed，不关闭面板
+    if (isDesktop.value) {
+        nextTick(() => scrollToIndex(index))
+        return
+    }
     episodesOpen.value = false
     nextTick(() => scrollToIndex(index))
+}
+
+/**
+ * 简介入口：宽屏已有左侧信息栏，不再弹层；1024 和移动端打开弹层。
+ */
+function openInfo() {
+    if (isWide.value) {
+        return
+    }
+    infoOpen.value = true
+}
+
+/**
+ * 选集入口：桌面切工作区标签，移动端打开底部弹层。
+ */
+function openEpisodes() {
+    if (isDesktop.value) {
+        workspaceTab.value = 'episodes'
+        return
+    }
+    episodesOpen.value = true
 }
 
 function openComments() {
@@ -292,6 +330,10 @@ function openComments() {
         return
     }
     commentsScope.value = 'episode'
+    if (isDesktop.value) {
+        workspaceTab.value = 'comments'
+        return
+    }
     commentsOpen.value = true
 }
 
@@ -306,6 +348,10 @@ function openCompanion() {
     const unlocked = Boolean(episode.free) || unlockedIds.value.has(Number(episode.episodeId))
     if (!unlocked) {
         toast.push('解锁本集后可使用伴看')
+        return
+    }
+    if (isDesktop.value) {
+        workspaceTab.value = 'companion'
         return
     }
     companionOpen.value = true
@@ -328,6 +374,47 @@ function adjustCounter(key, delta) {
     detail.value.counters[key] = Math.max(0, Number(detail.value.counters[key] || 0) + delta)
 }
 
+/**
+ * 异步计数完成后拉取 drama 统计，覆盖本地乐观值。
+ */
+async function refreshCounters() {
+    try {
+        const stats = await fetchDramaStats(Number(props.dramaId))
+        if (!detail.value?.counters || !stats) {
+            return
+        }
+        detail.value.counters.likeCount = stats.likeCount
+        detail.value.counters.favoriteCount = stats.favoriteCount
+        detail.value.counters.commentCount = stats.commentCount
+        detail.value.counters.viewCount = stats.viewCount
+    } catch {
+        // 计数校准失败不影响已完成的互动
+    }
+}
+
+/**
+ * 事件终态为 DEAD 时回滚乐观状态；只回滚当前事件，避免覆盖后续点击。
+ */
+function rollbackLike(eventId, previous) {
+    if (likeAckId.value !== eventId) {
+        return
+    }
+    likeAckId.value = ''
+    state.value = { ...state.value, liked: previous }
+    adjustCounter('likeCount', previous ? 1 : -1)
+    toast.push('点赞同步失败，已恢复状态')
+}
+
+function rollbackFavorite(eventId, previous) {
+    if (favoriteAckId.value !== eventId) {
+        return
+    }
+    favoriteAckId.value = ''
+    state.value = { ...state.value, favorited: previous }
+    adjustCounter('favoriteCount', previous ? 1 : -1)
+    toast.push('收藏同步失败，已恢复状态')
+}
+
 async function toggleLike() {
     if (!state.value || pending.like) {
         return
@@ -342,6 +429,14 @@ async function toggleLike() {
             ? await unlikeTarget(1, Number(props.dramaId))
             : await likeTarget(1, Number(props.dramaId))
         state.value = { ...state.value, liked: result.active }
+        if (result.eventId) {
+            likeAckId.value = result.eventId
+            ack.track(result.eventId, {
+                onConsumed: refreshCounters,
+                onTimeout: refreshCounters,
+                onDead: () => rollbackLike(result.eventId, previous)
+            })
+        }
     } catch (cause) {
         state.value = { ...state.value, liked: previous }
         adjustCounter('likeCount', previous ? 1 : -1)
@@ -365,6 +460,14 @@ async function toggleFavorite() {
             ? await unfavoriteDrama(Number(props.dramaId))
             : await favoriteDrama(Number(props.dramaId))
         state.value = { ...state.value, favorited: result.active }
+        if (result.eventId) {
+            favoriteAckId.value = result.eventId
+            ack.track(result.eventId, {
+                onConsumed: refreshCounters,
+                onTimeout: refreshCounters,
+                onDead: () => rollbackFavorite(result.eventId, previous)
+            })
+        }
     } catch (cause) {
         state.value = { ...state.value, favorited: previous }
         adjustCounter('favoriteCount', previous ? 1 : -1)
@@ -373,6 +476,33 @@ async function toggleFavorite() {
         pending.favorite = false
     }
 }
+
+// 2. 切到未解锁剧集时，伴看标签自动退回选集
+watch(activeIndex, () => {
+    if (!isDesktop.value || workspaceTab.value !== 'companion') {
+        return
+    }
+    const episode = activeEpisode.value
+    if (!episode) {
+        return
+    }
+    const unlocked = Boolean(episode.free) || unlockedIds.value.has(Number(episode.episodeId))
+    if (!unlocked) {
+        workspaceTab.value = 'episodes'
+        toast.push('解锁本集后可使用伴看')
+    }
+})
+
+// 3. 进入桌面布局时收起移动端弹层，保证评论和伴看只有一份实例
+watch(isDesktop, (desktop) => {
+    if (!desktop) {
+        return
+    }
+    infoOpen.value = false
+    episodesOpen.value = false
+    commentsOpen.value = false
+    companionOpen.value = false
+})
 
 onMounted(() => {
     lockBodyScroll()
@@ -393,7 +523,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div class="feed-shell">
+    <div class="feed-shell" :class="{ 'has-workspace': isDesktop }">
+        <FeedInfoPanel v-if="isWide && detail" :detail="detail"/>
+
+        <div class="feed-stage">
         <header class="feed-top">
             <button class="feed-back" type="button" aria-label="返回" @click="goBack">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -455,8 +588,8 @@ onBeforeUnmount(() => {
                         @favorite="toggleFavorite"
                         @comments="openComments"
                         @companion="openCompanion"
-                        @info="infoOpen = true"
-                        @episodes="episodesOpen = true"
+                        @info="openInfo"
+                        @episodes="openEpisodes"
                         @unlocked="onUnlocked"
                         @retry-points="loadPoints"
                         @recharge="router.push('/recharge')"
@@ -473,8 +606,27 @@ onBeforeUnmount(() => {
                 </section>
             </div>
 
-            <DramaInfoSheet v-model="infoOpen" :detail="detail"/>
+            <p v-if="stateError" class="feed-state-error">{{ stateError }}</p>
+        </template>
+        </div>
 
+        <FeedWorkspace
+            v-if="isDesktop && detail"
+            :tab="workspaceTab"
+            :comments-scope="commentsScope"
+            :detail="detail"
+            :episodes="episodes"
+            :active-episode="activeEpisode"
+            :unlocked-ids="unlockedIds"
+            @update:tab="workspaceTab = $event"
+            @update:comments-scope="commentsScope = $event"
+            @select="selectEpisode"
+        />
+
+        <template v-if="detail">
+            <DramaInfoSheet v-if="!isWide" v-model="infoOpen" :detail="detail"/>
+
+            <template v-if="!isDesktop">
             <EpisodeSheet
                 v-model="episodesOpen"
                 :episodes="episodes"
@@ -518,8 +670,7 @@ onBeforeUnmount(() => {
                 :drama-title="detail.title"
                 :episode="activeEpisode"
             />
-
-            <p v-if="stateError" class="feed-state-error">{{ stateError }}</p>
+            </template>
         </template>
     </div>
 </template>
@@ -535,6 +686,13 @@ onBeforeUnmount(() => {
     overflow: hidden;
     background: #000;
     transform: translateX(-50%);
+}
+
+/* 移动端 stage 铺满整个壳；桌面端收窄成竖屏播放列 */
+.feed-stage {
+    position: relative;
+    height: 100%;
+    overflow: hidden;
 }
 
 .feed-top {
@@ -673,6 +831,51 @@ onBeforeUnmount(() => {
     border-color: rgba(255, 179, 63, 0.55);
     background: var(--brand-soft);
     color: var(--brand-2);
+}
+
+/* ---------- 桌面端（≥1024）：竖屏 Feed + 右侧工作区 ---------- */
+
+@media (min-width: 1024px) {
+    .feed-shell {
+        display: grid;
+        width: 100%;
+        max-width: 1320px;
+        grid-template-columns: minmax(0, 1fr) var(--feed-workspace-width);
+        background: #05070a;
+    }
+
+    .feed-stage {
+        grid-column: 1;
+        width: min(480px, 100%);
+        height: 100dvh;
+        margin: 0 auto;
+        background: #000;
+        box-shadow: 0 0 70px rgba(0, 0, 0, 0.55);
+    }
+
+    .feed-workspace {
+        grid-column: 2;
+    }
+}
+
+/* ---------- 宽屏（≥1280）：左侧信息栏 + 中间 Feed + 右侧工作区 ---------- */
+
+@media (min-width: 1280px) {
+    .feed-shell {
+        grid-template-columns: var(--feed-info-width) minmax(0, 1fr) var(--feed-workspace-width);
+    }
+
+    .feed-info-panel {
+        grid-column: 1;
+    }
+
+    .feed-stage {
+        grid-column: 2;
+    }
+
+    .feed-workspace {
+        grid-column: 3;
+    }
 }
 
 @keyframes feed-spin {

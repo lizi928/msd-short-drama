@@ -301,4 +301,46 @@ async function confirmDelete() {
     flex-wrap: wrap;
     gap: 8px;
 }
+
+/* ---------- 桌面端（≥1024）：一行一条，标题 / 元信息 / 操作 ---------- */
+
+@media (min-width: 1024px) {
+    .creator-page {
+        gap: 14px;
+    }
+
+    .card-list {
+        gap: 10px;
+    }
+
+    .drama-card {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 24px;
+        padding: 14px 20px;
+    }
+
+    .card-head {
+        align-items: center;
+    }
+
+    .card-copy h2 {
+        margin-bottom: 0;
+        font-size: 15px;
+    }
+
+    /* 简介让位给单行布局，详情进编辑页查看 */
+    .card-copy p {
+        display: none;
+    }
+
+    .card-meta {
+        flex-wrap: nowrap;
+        white-space: nowrap;
+    }
+
+    .card-actions {
+        flex-wrap: nowrap;
+    }
+}
 </style>

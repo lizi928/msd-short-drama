@@ -48,3 +48,15 @@ SET c.`like_count` = (
     SELECT COUNT(*) FROM `t_user_like` l
     WHERE l.`target_type` = 3 AND l.`target_id` = c.`id`
 );
+
+UPDATE `t_comment` SET `reply_count` = 0 WHERE `root_id` = 0;
+
+UPDATE `t_comment` root
+JOIN (
+    SELECT `root_id`, COUNT(*) AS reply_total
+    FROM `t_comment`
+    WHERE `root_id` <> 0 AND `status` = 1
+    GROUP BY `root_id`
+) reply ON reply.`root_id` = root.`id`
+SET root.`reply_count` = reply.reply_total
+WHERE root.`root_id` = 0;

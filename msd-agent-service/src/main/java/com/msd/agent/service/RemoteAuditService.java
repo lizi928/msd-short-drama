@@ -1,11 +1,19 @@
 package com.msd.agent.service;
 
 import com.msd.agent.dto.RemoteAuditReply;
+import com.msd.common.constant.CommonConstants;
+import io.a2a.client.transport.jsonrpc.JSONRPCTransport;
+import io.a2a.client.transport.jsonrpc.JSONRPCTransportConfig;
+import io.a2a.client.transport.jsonrpc.JSONRPCTransportConfigBuilder;
+import io.a2a.client.transport.spi.interceptors.ClientCallContext;
+import io.a2a.client.transport.spi.interceptors.ClientCallInterceptor;
+import io.a2a.client.transport.spi.interceptors.PayloadAndHeaders;
 import io.a2a.spec.A2AClientHTTPError;
 import io.a2a.spec.AgentCard;
 import io.a2a.spec.AgentInterface;
 import io.a2a.spec.TransportProtocol;
 import io.agentscope.core.a2a.agent.A2aAgent;
+import io.agentscope.core.a2a.agent.A2aAgentConfig;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.nacos.a2a.discovery.NacosAgentCardResolver;
 import jakarta.annotation.PostConstruct;
@@ -58,18 +66,22 @@ public class RemoteAuditService {
     private final Duration requestTimeout;
     // 失败后的最大重试次数
     private final int maxRetries;
+    // 内部调用 token；为空时 dev fail-open
+    private final String internalToken;
 
     /**
-     * 注入懒加载的 AgentCard 解析器和远程调用参数。
+     * 注入懒加载的 AgentCard 解析器、远程调用参数和内部 token。
      */
     public RemoteAuditService(ObjectProvider<NacosAgentCardResolver> resolverProvider,
             @Value("${msd.ai.a2a.remote.agent-name:audit-agent}") String agentName,
             @Value("${msd.ai.a2a.remote.request-timeout:60s}") Duration requestTimeout,
-            @Value("${msd.ai.a2a.remote.max-retries:2}") int maxRetries) {
+            @Value("${msd.ai.a2a.remote.max-retries:2}") int maxRetries,
+            @Value("${msd.security.internal-token:}") String internalToken) {
         this.resolverProvider = resolverProvider;
         this.agentName = agentName;
         this.requestTimeout = requestTimeout;
         this.maxRetries = maxRetries;
+        this.internalToken = internalToken == null ? "" : internalToken.trim();
     }
 
     /**
@@ -119,12 +131,21 @@ public class RemoteAuditService {
                     return probe(agentCard).then(Mono.defer(() -> {
                         // 3. A2aAgent 不是线程安全的，按调用创建，不能做成单例；
                         // 使用本次解析的卡片快照，避免调用过程中重复解析
-                        A2aAgent agent = A2aAgent.builder()
+                        A2aAgent.Builder agentBuilder = A2aAgent.builder()
                                 .name(agentName)
                                 .agentCard(agentCard)
-                                .checkRunning(false)
-                                .build();
-                        return agent.call(List.of(new UserMessage(content)));
+                                .checkRunning(false);
+                        // 4. 服务端开启内部鉴权时，为 JSON-RPC 请求统一附加内部 token
+                        if (StringUtils.hasText(internalToken)) {
+                            JSONRPCTransportConfig transportConfig =
+                                    new JSONRPCTransportConfigBuilder()
+                                            .addInterceptor(new InternalTokenInterceptor(internalToken))
+                                            .build();
+                            agentBuilder.a2aAgentConfig(A2aAgentConfig.builder()
+                                    .withTransport(JSONRPCTransport.class, transportConfig)
+                                    .build());
+                        }
+                        return agentBuilder.build().call(List.of(new UserMessage(content)));
                     }));
                 })
                 // 3. 单次远程调用超时；超时同样进入重试
@@ -211,11 +232,15 @@ public class RemoteAuditService {
         }
         String baseUrl = cardUri.getScheme() + "://" + cardUri.getAuthority();
         // 2. 请求 well-known 卡片地址，仅 200 视为服务可用
-        HttpRequest request = HttpRequest.newBuilder(
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(
                         URI.create(baseUrl + "/.well-known/agent-card.json"))
                 .timeout(PROBE_TIMEOUT)
-                .GET()
-                .build();
+                .GET();
+        // AgentCard 本身只读，但审计服务前置过滤器可能要求 token，这里一并带上
+        if (StringUtils.hasText(internalToken)) {
+            requestBuilder.header(CommonConstants.HEADER_INTERNAL_TOKEN, internalToken);
+        }
+        HttpRequest request = requestBuilder.build();
         return Mono.fromCompletionStage(
                         () -> PROBE_CLIENT.sendAsync(
                                 request, HttpResponse.BodyHandlers.discarding()))
@@ -252,5 +277,30 @@ public class RemoteAuditService {
 
         // 3. 连接拒绝、超时、Nacos 发现失败等按瞬时故障处理
         return true;
+    }
+
+    /**
+     * A2A JSON-RPC 调用的内部 token 拦截器。
+     */
+    private static final class InternalTokenInterceptor extends ClientCallInterceptor {
+
+        // 服务端要求的内部 token
+        private final String token;
+
+        private InternalTokenInterceptor(String token) {
+            this.token = token;
+        }
+
+        @Override
+        public PayloadAndHeaders intercept(String method, Object payload,
+                Map<String, String> headers, AgentCard agentCard, ClientCallContext context) {
+            // 1. 保留 SDK 已有 header，再覆盖服务端 token
+            Map<String, String> merged = new java.util.LinkedHashMap<>();
+            if (headers != null) {
+                merged.putAll(headers);
+            }
+            merged.put(CommonConstants.HEADER_INTERNAL_TOKEN, token);
+            return new PayloadAndHeaders(payload, merged);
+        }
     }
 }

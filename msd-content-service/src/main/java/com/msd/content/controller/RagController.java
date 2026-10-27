@@ -77,9 +77,12 @@ public class RagController {
      */
     @PostMapping("/recommend")
     public Mono<Result<RagRecommendResponse>> recommend(
-            @Valid @RequestBody RagRecommendRequest request) {
-        // 推荐链路包含远程检索和模型调用，切到弹性线程池执行，避免阻塞事件循环
-        return Mono.fromCallable(() -> recommendationService.recommend(request))
+            @Valid @RequestBody RagRecommendRequest request,
+            @RequestHeader(value = CommonConstants.HEADER_USER_ID, required = false) String userIdHeader) {
+        // 1. 解析可选用户 ID；未登录或非法时不加载画像
+        Long userId = parseUserId(userIdHeader);
+        // 2. 推荐链路包含远程检索和模型调用，切到弹性线程池执行，避免阻塞事件循环
+        return Mono.fromCallable(() -> recommendationService.recommend(request, userId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .timeout(Duration.ofMillis(properties.getTotalTimeoutMs()))
                 .map(Result::ok)
@@ -120,6 +123,21 @@ public class RagController {
         return Mono.fromCallable(this::buildStatus)
                 .subscribeOn(Schedulers.boundedElastic())
                 .map(Result::ok);
+    }
+
+    /**
+     * 解析可选用户 ID；缺失或非法时返回 null，推荐继续但不用画像。
+     */
+    private Long parseUserId(String userIdHeader) {
+        if (userIdHeader == null || userIdHeader.isBlank()) {
+            return null;
+        }
+        try {
+            long userId = Long.parseLong(userIdHeader);
+            return userId > 0 ? userId : null;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     /**

@@ -22,6 +22,11 @@ defineProps({
     actionLoading: {
         type: Boolean,
         default: false
+    },
+    // row 保持移动端横排，grid 用于桌面海报网格
+    layout: {
+        type: String,
+        default: 'row'
     }
 })
 
@@ -29,7 +34,7 @@ defineEmits(['open', 'action'])
 </script>
 
 <template>
-    <article class="collection-item">
+    <article class="collection-item" :class="`is-${layout}`">
         <button
             class="item-main"
             type="button"
@@ -37,7 +42,7 @@ defineEmits(['open', 'action'])
             @click="$emit('open', item)"
         >
             <span class="item-cover">
-                <GradientCover :seed="item.dramaId" :title="item.title" ratio="thumb"/>
+                <GradientCover :seed="item.dramaId" :title="item.title" :src="item.coverUrl" ratio="thumb"/>
             </span>
             <span class="item-copy">
                 <strong>{{ item.title || '内容暂不可见' }}</strong>
@@ -130,5 +135,32 @@ defineEmits(['open', 'action'])
 
 .item-action:disabled {
     opacity: 0.5;
+}
+
+/* ---------- 桌面海报网格变体 ---------- */
+
+.collection-item.is-grid {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.is-grid .item-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 9px;
+}
+
+.is-grid .item-cover {
+    width: 100%;
+}
+
+.is-grid .item-copy strong {
+    white-space: normal;
+}
+
+.is-grid .item-action {
+    width: 100%;
+    padding: 7px 9px;
 }
 </style>

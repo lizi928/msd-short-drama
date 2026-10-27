@@ -1,7 +1,12 @@
 <script setup>
+import { computed, ref, watch } from 'vue'
 import GradientCover from '../GradientCover.vue'
 import { formatMs } from '../../utils/format'
 
+/**
+ * 沉浸式播放器。组件名沿用 MockPlayer，但实际会播放真实 <video>；
+ * 没有视频地址或加载失败时回退到封面占位画面。
+ */
 const props = defineProps({
     seed: {
         type: [String, Number],
@@ -10,6 +15,22 @@ const props = defineProps({
     title: {
         type: String,
         default: ''
+    },
+    coverUrl: {
+        type: String,
+        default: ''
+    },
+    videoUrl: {
+        type: String,
+        default: ''
+    },
+    muted: {
+        type: Boolean,
+        default: true
+    },
+    attach: {
+        type: Function,
+        default: null
     },
     episodeTitle: {
         type: String,
@@ -41,7 +62,16 @@ const props = defineProps({
     }
 })
 
-defineEmits(['toggle', 'seek', 'seek-commit', 'replay'])
+defineEmits(['toggle', 'seek', 'seek-commit', 'replay', 'toggle-muted'])
+
+const videoError = ref(false)
+
+// 换集后重试加载新视频
+watch(() => props.videoUrl, () => {
+    videoError.value = false
+})
+
+const showVideo = computed(() => Boolean(props.videoUrl) && !videoError.value)
 
 /**
  * 把 range 的值转成毫秒。
@@ -53,14 +83,26 @@ function readValue(event) {
 
 <template>
     <section class="mock-player" :class="{ 'is-immersive': immersive }" aria-label="模拟播放器">
-        <div class="stage">
+        <div class="stage" :class="{ 'has-video': showVideo }">
             <GradientCover
                 class="stage-cover"
                 :seed="seed"
                 :title="title"
+                :src="coverUrl"
                 ratio="poster"
                 :rounded="false"
             />
+            <video
+                v-if="showVideo"
+                :ref="attach"
+                class="stage-video"
+                :src="videoUrl"
+                :poster="coverUrl"
+                preload="metadata"
+                playsinline
+                :muted="muted"
+                @error="videoError = true"
+            ></video>
             <span class="stage-scrim" aria-hidden="true"></span>
             <span v-if="!immersive" class="mock-badge">模拟播放</span>
 
@@ -113,6 +155,27 @@ function readValue(event) {
                 </svg>
             </button>
 
+            <button
+                v-if="showVideo"
+                class="control-btn"
+                type="button"
+                :aria-label="muted ? '取消静音' : '静音'"
+                @click="$emit('toggle-muted')"
+            >
+                <svg v-if="muted" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                    <path d="M4 9v6h4l5 4V5L8 9z"/>
+                    <path d="M16.5 9.5l5 5M21.5 9.5l-5 5"/>
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                    <path d="M4 9v6h4l5 4V5L8 9z"/>
+                    <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/>
+                </svg>
+            </button>
+
             <span class="time">{{ formatMs(positionMs) }}</span>
 
             <input
@@ -131,7 +194,7 @@ function readValue(event) {
             <span class="time">{{ formatMs(durationMs) }}</span>
         </div>
 
-        <p v-if="durationMs <= 0" class="duration-warning">缺少视频时长，无法模拟播放。</p>
+        <p v-if="durationMs <= 0" class="duration-warning">缺少视频时长，无法播放。</p>
     </section>
 </template>
 
@@ -162,6 +225,21 @@ function readValue(event) {
     width: 100%;
     height: 100%;
     aspect-ratio: auto;
+}
+
+/* 播放真实视频时，封面退成模糊背景，视频本身按比例完整显示 */
+.stage.has-video .stage-cover {
+    filter: blur(18px) brightness(0.45);
+    transform: scale(1.08);
+}
+
+.stage-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: transparent;
 }
 
 .stage-scrim {
@@ -385,6 +463,11 @@ function readValue(event) {
 
 .mock-player.is-immersive .stage-cover {
     aspect-ratio: auto;
+}
+
+/* 竖屏 Feed 内让 16:9 素材铺满舞台，非沉浸模式仍完整显示 */
+.mock-player.is-immersive .stage-video {
+    object-fit: cover;
 }
 
 .mock-player.is-immersive .controls {

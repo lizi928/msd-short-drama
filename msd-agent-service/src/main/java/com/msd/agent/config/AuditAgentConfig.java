@@ -9,6 +9,7 @@ import com.msd.agent.support.AuditPromptLoader;
 import com.msd.agent.support.AuditPromptLoader.AuditPrompt;
 import com.msd.agent.tool.DramaTools;
 import com.msd.agent.tool.SpringAiToolBridge;
+import com.msd.agent.tool.ToolGuard;
 import io.a2a.spec.AgentSkill;
 import io.a2a.spec.TransportProtocol;
 import io.agentscope.core.ReActAgent;
@@ -62,11 +63,10 @@ public class AuditAgentConfig {
      * 创建 audit 专用 Toolkit，避免把首页查询等无关工具暴露给审核 Agent。
      */
     @Bean
-    public Toolkit auditToolkit(DramaTools dramaTools) {
-        // 1. 复用 Spring AI 注解桥接，再按工具名裁剪
-        List<AgentTool> tools = SpringAiToolBridge.adapt(dramaTools).stream()
-                .filter(tool -> AUDIT_TOOL_NAMES.contains(tool.getName()))
-                .toList();
+    public Toolkit auditToolkit(DramaTools dramaTools, ToolGuard toolGuard) {
+        // 1. 复用 Spring AI 注解桥接和统一沙箱，再按审核白名单裁剪
+        List<AgentTool> tools = toolGuard.filterAndValidate(
+                SpringAiToolBridge.adapt(dramaTools, toolGuard), AUDIT_TOOL_NAMES);
 
         // 2. 注册到独立 Toolkit
         Toolkit toolkit = new Toolkit();

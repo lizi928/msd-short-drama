@@ -2,6 +2,7 @@ package com.msd.agent.controller;
 
 import com.msd.agent.dto.AgentChatReply;
 import com.msd.agent.dto.AgentChatRequest;
+import com.msd.agent.routing.PromptGuard;
 import com.msd.agent.service.AgentUnavailableException;
 import com.msd.agent.service.SupervisorAgentService;
 import com.msd.common.constant.CommonConstants;
@@ -10,6 +11,8 @@ import com.msd.common.result.ResultCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -47,12 +50,16 @@ public class AgentChatController {
 
     // Supervisor 对话服务
     private final SupervisorAgentService supervisorAgentService;
+    // 用户文本 Prompt 防护
+    private final PromptGuard promptGuard;
 
     /**
-     * 注入 Supervisor 调用服务。
+     * 注入 Supervisor 调用服务和 Prompt 防护。
      */
-    public AgentChatController(SupervisorAgentService supervisorAgentService) {
+    public AgentChatController(SupervisorAgentService supervisorAgentService,
+            PromptGuard promptGuard) {
         this.supervisorAgentService = supervisorAgentService;
+        this.promptGuard = promptGuard;
     }
 
     /**
@@ -61,7 +68,8 @@ public class AgentChatController {
     @PostMapping("/chat")
     public Mono<Result<AgentChatReply>> chat(
             @RequestHeader(value = CommonConstants.HEADER_USER_ID, required = false) String userId,
-            @RequestBody(required = false) AgentChatRequest request) {
+            @RequestBody(required = false) AgentChatRequest request,
+            ServerHttpResponse response) {
         // 1. userId 由网关注入，直连服务时也必须显式传
         if (!StringUtils.hasText(userId)) {
             return Mono.just(Result.fail(ResultCode.UNAUTHORIZED));
@@ -77,7 +85,22 @@ public class AgentChatController {
                     "message 不能超过 " + MAX_MESSAGE_LENGTH + " 字"));
         }
 
-        // 3. 会话 ID 为空则生成；非空时校验字符集
+        // 3. 清洗用户伪造的内部标记，拦截指令注入
+        PromptGuard.CheckResult guardResult = promptGuard.inspect(message);
+        if (guardResult.rejected()) {
+            log.warn("Agent prompt rejected: userId={}, markers={}",
+                    userId, guardResult.removedMarkers());
+            response.setStatusCode(HttpStatus.BAD_REQUEST);
+            return Mono.just(Result.fail(ResultCode.PARAM_ERROR.getCode(),
+                    guardResult.reason()));
+        }
+        String safeMessage = guardResult.text();
+        if (!StringUtils.hasText(safeMessage)) {
+            return Mono.just(Result.fail(ResultCode.PARAM_ERROR.getCode(),
+                    "message 清洗后不能为空"));
+        }
+
+        // 4. 会话 ID 为空则生成；非空时校验字符集
         String sessionId = StringUtils.hasText(request.sessionId())
                 ? request.sessionId().trim()
                 : UUID.randomUUID().toString();
@@ -86,17 +109,17 @@ public class AgentChatController {
                     "sessionId 只允许字母、数字、下划线和短横线，最长 64 位"));
         }
 
-        // 4. 伴看场景可选传当前剧集 ID，必须是正整数
+        // 5. 伴看场景可选传当前剧集 ID，必须是正整数
         Long episodeId = request.episodeId();
         if (episodeId != null && episodeId <= 0) {
             return Mono.just(Result.fail(ResultCode.PARAM_ERROR.getCode(),
                     "episodeId 必须为正整数"));
         }
 
-        // 5. RuntimeContext 传入 userId + sessionId，由 AgentScope 定位会话状态
-        // 6. 统一错误映射：未配置/初始化失败 50300，超时和模型异常 50000
+        // 6. RuntimeContext 传入 userId + sessionId，由 AgentScope 定位会话状态
+        // 7. 统一错误映射：未配置/初始化失败 50300，超时和模型异常 50000
         return Mono.defer(() -> supervisorAgentService.chat(
-                        userId, sessionId, message, episodeId))
+                        userId, sessionId, safeMessage, episodeId))
                 .map(Result::ok)
                 .onErrorResume(AgentUnavailableException.class, ex -> {
                     log.warn("Agent unavailable: {}", ex.getMessage());

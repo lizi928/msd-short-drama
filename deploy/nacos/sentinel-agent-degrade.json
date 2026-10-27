@@ -17,5 +17,15 @@
     "timeWindow": 10,
     "minRequestAmount": 5,
     "statIntervalMs": 10000
+  },
+  {
+    "resource": "agentChat",
+    "limitApp": "default",
+    "grade": 1,
+    "count": 60000,
+    "timeWindow": 30,
+    "minRequestAmount": 5,
+    "statIntervalMs": 30000,
+    "slowRatioThreshold": 0.5
   }
 ]

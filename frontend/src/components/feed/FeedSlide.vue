@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { fetchPlayback, unlockEpisode } from '../../api/order'
 import { useToastStore } from '../../stores/toast'
-import { useMockPlayer } from '../../composables/useMockPlayer'
+import { useVideoPlayer } from '../../composables/useVideoPlayer'
 import { useWatchReporter } from '../../composables/useWatchReporter'
 import { formatCount } from '../../utils/format'
 import GradientCover from '../GradientCover.vue'
@@ -103,7 +103,9 @@ const authorized = computed(() => Boolean(
 ))
 const commentCount = computed(() => Number(props.episode.commentCount) || 0)
 
-const player = useMockPlayer(durationMs)
+const player = useVideoPlayer(durationMs)
+// 优先使用视频元数据里的真实时长，接口时长作为回退
+const effectiveDurationMs = computed(() => player.durationMs.value || durationMs.value)
 
 /**
  * 上报快照始终读取当前播放器状态。
@@ -116,7 +118,7 @@ function snapshot() {
         dramaId: playback.value.dramaId,
         episodeId: playback.value.episodeId,
         positionMs: player.positionMs.value,
-        durationMs: durationMs.value,
+        durationMs: effectiveDurationMs.value,
         finished: player.finished.value
     }
 }
@@ -399,8 +401,12 @@ onBeforeUnmount(() => {
                 :show-head="false"
                 :seed="episode.episodeId"
                 :title="drama.title"
+                :cover-url="drama.coverUrl"
+                :video-url="playback.videoUrl"
+                :muted="player.muted.value"
+                :attach="player.attach"
                 :episode-title="episode.title"
-                :duration-ms="durationMs"
+                :duration-ms="effectiveDurationMs"
                 :position-ms="player.positionMs.value"
                 :playing="player.playing.value"
                 :finished="player.finished.value"
@@ -408,6 +414,7 @@ onBeforeUnmount(() => {
                 @seek="onSeek"
                 @seek-commit="onSeekCommit"
                 @replay="replay"
+                @toggle-muted="player.toggleMuted"
             />
         </template>
 
@@ -416,6 +423,7 @@ onBeforeUnmount(() => {
                 class="feed-poster"
                 :seed="episode.episodeId"
                 :title="drama.title"
+                :src="drama.coverUrl"
                 ratio="poster"
                 :rounded="false"
             />

@@ -155,6 +155,15 @@ onMounted(load)
     animation: watch-spin 800ms linear infinite;
 }
 
+/* 桌面端取消 480 移动壳，Feed 自己负责三栏布局 */
+@media (min-width: 1024px) {
+    .watch-page {
+        left: 0;
+        width: 100%;
+        transform: none;
+    }
+}
+
 @keyframes watch-spin {
     to {
         transform: rotate(360deg);

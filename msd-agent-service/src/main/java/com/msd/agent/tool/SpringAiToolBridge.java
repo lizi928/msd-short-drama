@@ -44,6 +44,13 @@ public final class SpringAiToolBridge {
      * 扫描 Spring AI @Tool 方法并转换为 AgentScope AgentTool 列表。
      */
     public static List<AgentTool> adapt(Object toolObject) {
+        return adapt(toolObject, null);
+    }
+
+    /**
+     * 扫描并包装统一 ToolGuard；guard 为空时保持旧行为。
+     */
+    public static List<AgentTool> adapt(Object toolObject, ToolGuard guard) {
         // 1. 取原始用户类，避免 CGLIB 代理丢失方法注解
         Class<?> userClass = ClassUtils.getUserClass(toolObject);
         List<AgentTool> tools = new ArrayList<>();
@@ -54,7 +61,7 @@ public final class SpringAiToolBridge {
             }
             Tool tool = AnnotationUtils.findAnnotation(method, Tool.class);
             if (tool != null) {
-                tools.add(new SpringAiToolAdapter(toolObject, method, tool));
+                tools.add(new SpringAiToolAdapter(toolObject, method, tool, guard));
             }
         }
         // 3. 一个工具都没有说明注解写错，直接失败便于启动期发现
@@ -76,11 +83,14 @@ public final class SpringAiToolBridge {
         private final Method method;
         // 方法参数元数据，用于按名称映射模型入参
         private final Parameter[] parameters;
+        // 统一工具权限沙箱
+        private final ToolGuard guard;
 
         /**
          * 包装 @Tool 方法，生成 AgentScope 工具定义并缓存参数信息。
          */
-        private SpringAiToolAdapter(Object toolObject, Method method, Tool tool) {
+        private SpringAiToolAdapter(Object toolObject, Method method, Tool tool,
+                ToolGuard guard) {
             super(ToolBase.builder()
                     .name(StringUtils.hasText(tool.name()) ? tool.name() : method.getName())
                     .description(tool.description())
@@ -91,6 +101,7 @@ public final class SpringAiToolBridge {
             this.toolObject = toolObject;
             this.method = method;
             this.parameters = method.getParameters();
+            this.guard = guard;
         }
 
         /**
@@ -106,27 +117,51 @@ public final class SpringAiToolBridge {
          * 实际工具调用；异常转成错误结果，避免中断 Agent 循环。
          */
         private ToolResultBlock invoke(ToolCallParam param) {
+            long startNanos = System.nanoTime();
+            Map<String, Object> input = param.getInput() == null ? Map.of() : param.getInput();
             try {
-                // 1. 按参数名把模型入参逐个转换成方法参数类型
-                Map<String, Object> input = param.getInput() == null ? Map.of() : param.getInput();
+                // 1. 统一沙箱先校验工具名、ID、分页和文本长度
+                if (guard != null) {
+                    guard.validate(getName(), input);
+                }
+
+                // 2. 按参数名把模型入参逐个转换成方法参数类型
                 Object[] arguments = new Object[parameters.length];
                 for (int index = 0; index < parameters.length; index += 1) {
                     Parameter parameter = parameters[index];
                     arguments[index] = convert(
                             input.get(parameter.getName()), parameter.getType(), parameter.getName());
                 }
-                // 2. 反射执行目标方法，结果统一转成文本
+                // 3. 反射执行目标方法，结果统一转成文本
                 Object result = method.invoke(toolObject, arguments);
-                return ToolResultBlock.text(result == null ? "" : String.valueOf(result));
+                String text = result == null ? "" : String.valueOf(result);
+                audit(param, startNanos, "success", text.length());
+                return ToolResultBlock.text(text);
+            } catch (ToolAccessException ex) {
+                // 4. 沙箱拒绝时不执行目标方法，返回可读原因给模型
+                audit(param, startNanos, "rejected", 0);
+                log.warn("Spring AI tool rejected: tool={}, reason={}", getName(), ex.getMessage());
+                return ToolResultBlock.error("工具调用被拒绝: " + ex.getMessage());
             } catch (InvocationTargetException ex) {
-                // 3. 目标方法自身抛错时取真实 cause，避免只看到反射包装异常
+                // 5. 目标方法自身抛错时取真实 cause，避免只看到反射包装异常
                 Throwable cause = ex.getTargetException() == null ? ex : ex.getTargetException();
+                audit(param, startNanos, "failed", 0);
                 log.warn("Spring AI tool failed: {}", getName(), cause);
                 return ToolResultBlock.error("工具执行失败: " + readableMessage(cause));
             } catch (Exception ex) {
-                // 4. 参数转换或反射失败同样转成错误结果
+                // 6. 参数转换或反射失败同样转成错误结果
+                audit(param, startNanos, "failed", 0);
                 log.warn("Spring AI tool failed: {}", getName(), ex);
                 return ToolResultBlock.error("工具执行失败: " + readableMessage(ex));
+            }
+        }
+
+        /**
+         * 记录工具审计；guard 为空时不产生额外日志。
+         */
+        private void audit(ToolCallParam param, long startNanos, String outcome, int resultLength) {
+            if (guard != null) {
+                guard.logCall(getName(), param, startNanos, outcome, resultLength);
             }
         }
     }

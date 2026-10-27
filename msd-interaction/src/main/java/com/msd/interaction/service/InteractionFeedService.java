@@ -17,6 +17,7 @@ import com.msd.interaction.dto.DramaState;
 import com.msd.interaction.dto.FavoriteItem;
 import com.msd.interaction.dto.HistoryItem;
 import com.msd.interaction.dto.InteractionStats;
+import com.msd.interaction.dto.InteractionStatsRow;
 import com.msd.interaction.dto.LikedDramaItem;
 import com.msd.interaction.dto.MyCommentView;
 import com.msd.interaction.entity.Comment;
@@ -24,6 +25,7 @@ import com.msd.interaction.entity.UserFavorite;
 import com.msd.interaction.entity.UserLike;
 import com.msd.interaction.entity.WatchHistory;
 import com.msd.interaction.mapper.CommentMapper;
+import com.msd.interaction.mapper.InteractionStatsMapper;
 import com.msd.interaction.mapper.UserFavoriteMapper;
 import com.msd.interaction.mapper.UserLikeMapper;
 import com.msd.interaction.mapper.WatchHistoryMapper;
@@ -67,24 +69,32 @@ public class InteractionFeedService {
     private final WatchHistoryMapper historyMapper;
     // 点赞 Mapper
     private final UserLikeMapper likeMapper;
+    // 个人中心四项计数聚合 Mapper
+    private final InteractionStatsMapper statsMapper;
+    // 评论首页短期缓存
+    private final CommentCache commentCache;
     // 用户服务 Feign 客户端，用于批量补齐作者信息
     private final UserClient userClient;
     // 短剧服务 Feign 客户端，用于批量补齐短剧和剧集信息
     private final DramaClient dramaClient;
 
     /**
-     * 注入互动 Mapper 和批量补齐客户端。
+     * 注入互动 Mapper、计数聚合、评论缓存和批量补齐客户端。
      */
     public InteractionFeedService(CommentMapper commentMapper,
                                   UserFavoriteMapper favoriteMapper,
                                   WatchHistoryMapper historyMapper,
                                   UserLikeMapper likeMapper,
+                                  InteractionStatsMapper statsMapper,
+                                  CommentCache commentCache,
                                   UserClient userClient,
                                   DramaClient dramaClient) {
         this.commentMapper = commentMapper;
         this.favoriteMapper = favoriteMapper;
         this.historyMapper = historyMapper;
         this.likeMapper = likeMapper;
+        this.statsMapper = statsMapper;
+        this.commentCache = commentCache;
         this.userClient = userClient;
         this.dramaClient = dramaClient;
     }
@@ -93,13 +103,23 @@ public class InteractionFeedService {
      * 分页查询根评论。
      */
     public PageResult<CommentView> listComments(Long userId, Long dramaId, Long episodeId, PageQuery page) {
-        // 1. 统计总数并查询当前页
+        // 1. 先读 15 秒本地缓存，只缓存原始评论行
+        CommentCache.PageData cached = commentCache.get(
+                dramaId, episodeId, page.pageNo(), page.pageSize());
+        if (cached != null) {
+            return PageResult.of(page.pageNo(), page.pageSize(), cached.total(),
+                    toCommentViews(userId, cached.comments()));
+        }
+
+        // 2. 未命中时统计总数并查询当前页
         long total = commentMapper.countRootComments(dramaId, episodeId);
         List<Comment> comments = total == 0
                 ? List.of()
                 : commentMapper.selectRootComments(dramaId, episodeId, page.offset(), page.pageSize());
+        commentCache.put(dramaId, episodeId, page.pageNo(), page.pageSize(),
+                new CommentCache.PageData(total, comments));
 
-        // 2. 补齐作者和点赞状态
+        // 3. 合并当前用户点赞状态后返回
         return PageResult.of(page.pageNo(), page.pageSize(), total, toCommentViews(userId, comments));
     }
 
@@ -289,12 +309,16 @@ public class InteractionFeedService {
      * 查询个人中心互动计数。
      */
     public InteractionStats getStats(Long userId) {
-        // 1. 四项计数都按当前用户实时聚合
+        // 1. 单条 SQL 聚合四项计数，避免 4 次往返
+        InteractionStatsRow row = statsMapper.selectStats(userId);
+        if (row == null) {
+            return new InteractionStats(0L, 0L, 0L, 0L);
+        }
         return new InteractionStats(
-                likeMapper.countLikedDramas(userId),
-                favoriteMapper.countByUser(userId),
-                commentMapper.countMyComments(userId),
-                historyMapper.countByUser(userId));
+                row.getLikedDramaCount() == null ? 0L : row.getLikedDramaCount(),
+                row.getFavoriteCount() == null ? 0L : row.getFavoriteCount(),
+                row.getCommentCount() == null ? 0L : row.getCommentCount(),
+                row.getHistoryCount() == null ? 0L : row.getHistoryCount());
     }
 
     /**

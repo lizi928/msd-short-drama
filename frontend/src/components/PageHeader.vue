@@ -1,5 +1,7 @@
 <script setup>
+import { computed, useSlots } from 'vue'
 import { useRouter } from 'vue-router'
+import { useMediaQuery } from '../composables/useMediaQuery'
 
 const props = defineProps({
     title: {
@@ -21,6 +23,13 @@ const props = defineProps({
 })
 
 const router = useRouter()
+const slots = useSlots()
+const isDesktop = useMediaQuery('(min-width: 1024px)')
+
+// 1. 桌面端标题已由顶部栏承担；没有副标题和操作按钮时不再渲染这一行
+const showHeader = computed(() => (
+    !isDesktop.value || Boolean(props.subtitle) || Boolean(slots.right)
+))
 
 /**
  * 有站内历史时返回上一页，直接打开深链时回退到指定页面。
@@ -35,19 +44,21 @@ function goBack() {
 </script>
 
 <template>
-    <header class="page-header">
-        <button v-if="showBack" class="icon-btn" type="button" aria-label="返回" @click="goBack">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M15 5l-7 7 7 7"/>
-            </svg>
-        </button>
-        <div class="page-header-copy">
-            <h1>{{ title }}</h1>
-            <span v-if="subtitle">{{ subtitle }}</span>
-        </div>
-        <div class="page-header-right">
-            <slot name="right"/>
+    <header v-if="showHeader" class="page-header">
+        <div class="page-header-inner">
+            <button v-if="showBack" class="icon-btn" type="button" aria-label="返回" @click="goBack">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M15 5l-7 7 7 7"/>
+                </svg>
+            </button>
+            <div class="page-header-copy">
+                <h1>{{ title }}</h1>
+                <span v-if="subtitle">{{ subtitle }}</span>
+            </div>
+            <div class="page-header-right">
+                <slot name="right"/>
+            </div>
         </div>
     </header>
 </template>
@@ -57,14 +68,17 @@ function goBack() {
     position: sticky;
     top: 0;
     z-index: 30;
+    border-bottom: 1px solid var(--line);
+    background: rgba(9, 11, 16, 0.86);
+    backdrop-filter: blur(18px);
+}
+
+.page-header-inner {
     display: flex;
     align-items: center;
     gap: 10px;
     min-height: 56px;
     padding: calc(env(safe-area-inset-top) + 8px) 14px 8px;
-    border-bottom: 1px solid var(--line);
-    background: rgba(9, 11, 16, 0.86);
-    backdrop-filter: blur(18px);
 }
 
 .icon-btn {
@@ -114,5 +128,35 @@ function goBack() {
     flex: none;
     align-items: center;
     gap: 8px;
+}
+
+@media (min-width: 1024px) {
+    /* 桌面端标题由顶部栏承担，这里退化成页面级操作条 */
+    .page-header {
+        position: static;
+        border-bottom: none;
+        background: none;
+        backdrop-filter: none;
+    }
+
+    .page-header-inner {
+        width: 100%;
+        max-width: var(--content-max);
+        min-height: 0;
+        margin: 0 auto;
+        padding: 18px var(--shell-gutter) 0;
+    }
+
+    .page-header .icon-btn {
+        display: none;
+    }
+
+    .page-header-copy h1 {
+        display: none;
+    }
+
+    .page-header-copy span {
+        font-size: 13px;
+    }
 }
 </style>

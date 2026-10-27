@@ -228,7 +228,7 @@ python scripts/load-test-ai.py --calls 200 --concurrency 100
 
 - **pinning**：JDK 21 中 `synchronized` 块内阻塞会钉住 carrier，压测时加 `-Djdk.tracePinnedThreads=full` 检查。
 - **Seata / ThreadLocal**：虚拟线程仍然有 ThreadLocal，但线程数量大，`ThreadLocal` 缓存和事务上下文要及时清理；解锁链路回归时必须验证 Seata XID 透传。
-- **Hikari**：`msd-drama` 连接池很小（默认 5），虚拟线程把并发拉高后，DB 仍是硬瓶颈；不要用虚拟线程直接打满数据库。
+- **Hikari**：P3 把 `msd-drama`、`msd-interaction` 连接池调到 20，其他服务 10；虚拟线程把并发拉高后 DB 仍是硬瓶颈，总连接数不要超过 MySQL `max_connections` 的 60%。
 - **下游限流**：`msd-agent-service` 有 Sentinel 熔断，demo 的 200 次并发可能触发降级，失败数会体现在响应里。
 - **线程名**：虚拟线程默认名可能为空，不要依赖线程名判断；用 `virtual` 字段。
 - **回滚**：`SPRING_THREADS_VIRTUAL_ENABLED=false` 重启即可；现有接口和 Seata 解锁不受影响。
@@ -305,6 +305,7 @@ mvn -B -pl msd-drama -am test
 | Kafka 点赞失效 | 4s 后 detail key 删除；33s 后 home key 删除；like_count 4→5→4 |
 | 虚拟线程 + Seata 回滚 | `unlock-with-failure` 返回 `50000`；order/drama 分支均回滚，余额 170、解锁/引用/计数均保持 0 |
 | 200 次外部压测 | 437ms，p50/p95/max=193/215/223ms |
+| P4 互动 2000 次/并发 50 | 1999/2000 成功，p50/p95/p99=21/73/128ms，outbox 0、消费组 LAG 0 |
 
 ## 8. 排障
 

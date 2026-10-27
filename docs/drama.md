@@ -221,6 +221,8 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 ### 4.1 搜索/分类（2026-10-26）
 
+> 以下结果未导入可选的 `deploy/mysql/seed/ai_drama_test.sql`。导入 9 部 AI 短剧后，默认总数变为 18，搜索结果会包含 5101-5109。
+
 | 用例 | 结果 |
 |---|---|
 | `GET /api/drama/internal/categories` | 200，7 个启用分类 |

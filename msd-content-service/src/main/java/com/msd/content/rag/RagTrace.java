@@ -3,10 +3,12 @@ package com.msd.content.rag;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.rag.Query;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * 单次 RAG 请求的追踪上下文。
@@ -31,16 +33,25 @@ public class RagTrace {
     // 改写耗时（毫秒）
     private long rewriteMillis;
 
-    // 向量检索命中数
-    private int vectorHits;
-    // BM25 检索命中数
-    private int bm25Hits;
-    // RRF 融合后的文档数
-    private int rrfHits;
-    // 向量检索耗时（毫秒）
-    private long vectorMillis;
-    // BM25 检索耗时（毫秒）
-    private long bm25Millis;
+    // 向量检索命中数，多查询并发时累加
+    private final LongAdder vectorHits = new LongAdder();
+    // BM25 检索命中数，多查询并发时累加
+    private final LongAdder bm25Hits = new LongAdder();
+    // RRF 融合后的文档数，多查询并发时累加
+    private final LongAdder rrfHits = new LongAdder();
+    // 向量检索耗时（毫秒），多查询并发时累加
+    private final LongAdder vectorMillis = new LongAdder();
+    // BM25 检索耗时（毫秒），多查询并发时累加
+    private final LongAdder bm25Millis = new LongAdder();
+
+    // 当前请求的用户 ID
+    private Long userId;
+    // 由画像生成的偏好检索词
+    private String preferenceQuery;
+    // 是否没有可用画像
+    private boolean personalizationEmpty;
+    // 多查询扩展后的检索词，按执行顺序记录
+    private final List<String> expandedQueries = Collections.synchronizedList(new ArrayList<>());
 
     // Rerank 耗时（毫秒）
     private long rerankMillis;
@@ -127,52 +138,99 @@ public class RagTrace {
 
     /** 向量检索命中数。 */
     public int getVectorHits() {
-        return vectorHits;
+        return vectorHits.intValue();
     }
 
-    /** 记录向量检索命中数。 */
-    public void setVectorHits(int vectorHits) {
-        this.vectorHits = vectorHits;
+    /** 累加向量检索命中数，供多查询并发调用。 */
+    public void addVectorHits(int hits) {
+        vectorHits.add(Math.max(hits, 0));
     }
 
     /** BM25 检索命中数。 */
     public int getBm25Hits() {
-        return bm25Hits;
+        return bm25Hits.intValue();
     }
 
-    /** 记录 BM25 检索命中数。 */
-    public void setBm25Hits(int bm25Hits) {
-        this.bm25Hits = bm25Hits;
+    /** 累加 BM25 检索命中数，供多查询并发调用。 */
+    public void addBm25Hits(int hits) {
+        bm25Hits.add(Math.max(hits, 0));
     }
 
     /** RRF 融合后的文档数。 */
     public int getRrfHits() {
-        return rrfHits;
+        return rrfHits.intValue();
     }
 
-    /** 记录 RRF 融合后的文档数。 */
-    public void setRrfHits(int rrfHits) {
-        this.rrfHits = rrfHits;
+    /** 累加 RRF 融合后的文档数，供多查询并发调用。 */
+    public void addRrfHits(int hits) {
+        rrfHits.add(Math.max(hits, 0));
     }
 
     /** 向量检索耗时（毫秒）。 */
     public long getVectorMillis() {
-        return vectorMillis;
+        return vectorMillis.longValue();
     }
 
-    /** 记录向量检索耗时（毫秒）。 */
-    public void setVectorMillis(long vectorMillis) {
-        this.vectorMillis = vectorMillis;
+    /** 累加向量检索耗时，供多查询并发调用。 */
+    public void addVectorMillis(long millis) {
+        vectorMillis.add(Math.max(millis, 0));
     }
 
     /** BM25 检索耗时（毫秒）。 */
     public long getBm25Millis() {
-        return bm25Millis;
+        return bm25Millis.longValue();
     }
 
-    /** 记录 BM25 检索耗时（毫秒）。 */
-    public void setBm25Millis(long bm25Millis) {
-        this.bm25Millis = bm25Millis;
+    /** 累加 BM25 检索耗时，供多查询并发调用。 */
+    public void addBm25Millis(long millis) {
+        bm25Millis.add(Math.max(millis, 0));
+    }
+
+    /** 当前请求用户 ID。 */
+    public Long getUserId() {
+        return userId;
+    }
+
+    /** 记录当前请求用户 ID。 */
+    public void setUserId(Long userId) {
+        this.userId = userId;
+    }
+
+    /** 画像生成的偏好检索词。 */
+    public String getPreferenceQuery() {
+        return preferenceQuery;
+    }
+
+    /** 记录偏好检索词。 */
+    public void setPreferenceQuery(String preferenceQuery) {
+        this.preferenceQuery = preferenceQuery;
+    }
+
+    /** 是否没有可用画像。 */
+    public boolean isPersonalizationEmpty() {
+        return personalizationEmpty;
+    }
+
+    /** 记录画像是否为空。 */
+    public void setPersonalizationEmpty(boolean personalizationEmpty) {
+        this.personalizationEmpty = personalizationEmpty;
+    }
+
+    /** 多查询扩展后的检索词。 */
+    public List<String> getExpandedQueries() {
+        synchronized (expandedQueries) {
+            return List.copyOf(expandedQueries);
+        }
+    }
+
+    /** 记录多查询扩展后的检索词。 */
+    public void setExpandedQueries(List<String> queries) {
+        synchronized (expandedQueries) {
+            expandedQueries.clear();
+            if (queries != null) {
+                expandedQueries.addAll(queries);
+            }
+        }
     }
 
     /** Rerank 耗时（毫秒）。 */

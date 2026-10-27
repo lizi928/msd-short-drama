@@ -29,6 +29,8 @@ public class Comment {
     private Long replyToUserId;
     // 评论内容
     private String content;
+    // 客户端请求幂等键
+    private String clientRequestId;
     // 点赞数（冗余）
     private Long likeCount;
     // 回复数（冗余，只记在根评论）
@@ -150,6 +152,20 @@ public class Comment {
      */
     public void setContent(String content) {
         this.content = content;
+    }
+
+    /**
+     * 获取客户端请求幂等键。
+     */
+    public String getClientRequestId() {
+        return clientRequestId;
+    }
+
+    /**
+     * 设置客户端请求幂等键。
+     */
+    public void setClientRequestId(String clientRequestId) {
+        this.clientRequestId = clientRequestId;
     }
 
     /**

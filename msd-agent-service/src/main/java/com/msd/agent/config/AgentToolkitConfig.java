@@ -4,6 +4,7 @@ import com.msd.agent.tool.CompanionTools;
 import com.msd.agent.tool.DramaTools;
 import com.msd.agent.tool.RemoteAuditTools;
 import com.msd.agent.tool.SpringAiToolBridge;
+import com.msd.agent.tool.ToolGuard;
 import io.agentscope.core.tool.AgentTool;
 import io.agentscope.core.tool.Toolkit;
 import org.slf4j.Logger;
@@ -39,24 +40,28 @@ public class AgentToolkitConfig {
     @Bean
     public Toolkit agentToolkit(DramaTools dramaTools,
             CompanionTools companionTools,
-            ObjectProvider<RemoteAuditTools> remoteAuditToolsProvider) {
-        // 1. 复用 Spring AI 生成工具定义和调用逻辑
-        List<AgentTool> tools = new ArrayList<>(SpringAiToolBridge.adapt(dramaTools));
+            ObjectProvider<RemoteAuditTools> remoteAuditToolsProvider,
+            ToolGuard toolGuard) {
+        // 1. 复用 Spring AI 生成工具定义和调用逻辑，统一挂载沙箱
+        List<AgentTool> tools = new ArrayList<>(SpringAiToolBridge.adapt(dramaTools, toolGuard));
 
         // 2. 注册 AI 伴看工具：当前集摘要和前情检索
-        tools.addAll(SpringAiToolBridge.adapt(companionTools));
+        tools.addAll(SpringAiToolBridge.adapt(companionTools, toolGuard));
 
         // 3. audit profile 之外才注册远程审核工具，避免 audit 进程自调用
         RemoteAuditTools remoteAuditTools = remoteAuditToolsProvider.getIfAvailable();
         if (remoteAuditTools != null) {
-            tools.addAll(SpringAiToolBridge.adapt(remoteAuditTools));
+            tools.addAll(SpringAiToolBridge.adapt(remoteAuditTools, toolGuard));
         }
 
-        // 4. 注册到 AgentScope Toolkit，默认进入 basic 组
+        // 4. 注册前按 allowlist 过滤；配置了不存在的工具时启动期失败
+        tools = toolGuard.filterAndValidate(tools, toolGuard.getAllow());
+
+        // 5. 注册到 AgentScope Toolkit，默认进入 basic 组
         Toolkit toolkit = new Toolkit();
         tools.forEach(toolkit::registerAgentTool);
 
-        // 5. 启动时打印工具名，便于确认注解扫描和桥接结果
+        // 6. 启动时打印工具名，便于确认注解扫描、沙箱和桥接结果
         log.info("AgentScope tools registered: {}",
                 tools.stream().map(AgentTool::getName).toList());
         return toolkit;

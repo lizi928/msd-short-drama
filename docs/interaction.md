@@ -28,7 +28,14 @@
 | POST | `/history` | 上报观看进度 |
 | DELETE | `/history/{episodeId}` | 删除单条历史 |
 | DELETE | `/history` | 清空全部历史 |
-| GET | `/stats` | 个人中心互动计数 |
+| GET | `/stats` | 个人中心互动计数（单条 SQL 聚合） |
+| GET | `/events/{eventId}` | 异步计数事件状态，校验事件归属 |
+
+服务间只读接口（不经过网关）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/internal-source/users/{userId}/behavior` | 推荐画像用行为权重：收藏 3、点赞 2、看完 1.5、未看完 1；返回最近互动和收藏剧 ID |
 
 ## 2. 评论
 
@@ -74,15 +81,16 @@
 ### 2.3 删除
 
 - 只有作者可以删除；不存在返回 404「评论不存在」，非作者返回 403「无权删除该评论」。
-- 删除回复：软删除、根评论 `reply_count-1`、写一条 `COMMENT_DELETED`。
-- 删除根评论：级联软删除所有可见回复，根和每条回复各写一条 `COMMENT_DELETED`，保证 drama/episode 评论数按条递减。
+- 删除回复：软删除、写一条 `COMMENT_DELETED`；根评论 `reply_count-1` 由 interaction 计数消费者异步派生。
+- 删除根评论：级联软删除所有可见回复，根和每条回复各写一条 `COMMENT_DELETED`，保证 drama/episode 评论数和回复数异步递减。
 - 已删除评论再次删除返回 404。
 
 ### 2.4 评论点赞
 
 - 复用 `/likes`，`targetType=3`。
 - 只允许点赞 `status=1` 的评论；已删除/隐藏评论返回 404。
-- `t_comment.like_count` 在 interaction 本地同步更新；评论列表返回当前用户 `liked`。
+- 点赞前先校验评论存在且可见，避免异步化后产生孤儿点赞。
+- `t_comment.like_count` 由 `msd-interaction-counter-v1` 消费 LIKE/UNLIKE 事件异步更新；评论列表返回当前用户 `liked`，前端先乐观更新。
 
 ## 3. 收藏、点赞短剧与观看历史
 
@@ -188,7 +196,76 @@
 
 测试评论已按 `[slice-test]%` 清理，测试用户和历史已删除，outbox/consume log 已用复位脚本清理。
 
-## 7. 不在本切片
+## 7. 异步计数与全链路确认
+
+### 7.1 写入链路
+
+```text
+点赞/收藏/评论
+  → interaction 本地事务：明细 + t_outbox_event(status=0)
+  → OutboxRelay 短事务认领（claim_token + locked_until 60s）
+  → 事务外 8 线程并行发 Kafka，1s 超时
+  → 按 claim_token 条件 markSent/markRetry/markDead
+  → drama / interaction 消费组按 event_id 幂等更新计数
+  → GET /events/{eventId} 返回 SENT/DEAD 与实际消费组
+```
+
+- 评论正文仍同步落库并返回 `commentId`；点赞数、回复数等派生效果异步。
+- `CommentRequest.clientRequestId` 是请求幂等键；重复或并发重复请求返回已有 `commentId`，不重复写评论和事件。
+- Outbox 批次默认 200，发送线程 8，租约 60 秒；实例崩溃后租约到期可被其他实例重新认领。
+- `markSent/markRetry/markDead` 都带 `claim_token` 条件，避免旧实例回写覆盖新认领。
+- 新消费组 `msd-interaction-counter-v1` 使用 `auto.offset.reset=latest`，上线前先用迁移脚本从明细重算 `like_count/reply_count`。
+
+### 7.2 事件状态
+
+```http
+GET /api/interaction/internal/interactions/events/{eventId}
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "eventId": "fb2daaee-...",
+  "status": 1,
+  "statusName": "SENT",
+  "eventType": "LIKE",
+  "retryCount": 0,
+  "sentAt": "2026-10-27T21:56:34.42",
+  "lastError": "",
+  "consumedGroups": ["msd-drama-counter-v1", "msd-interaction-counter-v1"]
+}
+```
+
+- 只允许事件归属用户查询；其他用户和不存在统一返回 404。
+- `status=0 PENDING`、`1 SENT`、`2 DEAD`；`consumedGroups` 来自 `t_event_consume_log`。
+- 前端 `useInteractionAck` 按 0/300/800/1500ms 轮询，页面隐藏时暂停；DEAD 回滚乐观状态，SENT 且已有消费组后拉取 drama 统计校准计数。
+
+### 7.3 读优化
+
+- 评论首页 Caffeine 15 秒缓存原始评论行，返回前再合并当前用户 `liked`；评论创建/删除/隐藏后按 dramaId 失效。
+- 个人中心 `stats` 的四个 COUNT 合并为一条 SQL。
+- interaction 开启 Java 21 虚拟线程，Hikari 连接池 20；drama 连接池 20；Kafka topic 6 分区、消费并发 6。
+- `msd.interaction.batch-consumer.enabled=true` 时 drama 切换批量消费：同聚合根 delta 合并后批量 UPDATE，缓存按短剧去重失效；默认关闭。
+
+### 7.4 压测与对账
+
+```bash
+python scripts/load-test-interaction.py --calls 2000 --concurrency 50 --target direct \
+  --user-id 9998 --cleanup-likes
+mysql -umsd -p -h127.0.0.1 DL < scripts/check-interaction-consistency.sql
+```
+
+脚本默认在压测结束后通过删除接口清理本轮创建的评论；`--cleanup-likes` 仅用于专用压测用户，取消测试短剧的点赞，避免污染演示数据。
+
+2026-10-27 P4 本地实测（直达 8104、专用用户 9998）：
+
+- 2000 calls / 并发 50：1999 成功、1 失败（0.05%）；失败为 `INSERT IGNORE t_user_like` 死锁，4 次重试后仍失败，低于 0.1% 目标。
+- p50/p95/p99 = 21/73/128ms，wall=1145ms；outbox pending=0，两个消费组 LAG=0。
+- 416 条压测评论删除成功，9 个测试短剧点赞取消；压测用户无残留点赞或可见评论。
+
+对账 SQL 输出短剧/剧集点赞、收藏、评论和评论点赞/回复的不一致行；本地演示 seed 计数是合成基数，生产数据或先执行重建脚本后才有对账意义。Kafka 积压可用 `kafka-consumer-groups --describe` 查看。
+
+## 8. 不在本切片
 
 - 评论 AI 预审、敏感词、评论编辑、评论恢复、评论点赞列表；管理员隐藏/删除见 [moderation.md](moderation.md)。
 - 按短剧聚合的「继续观看」已接入 `GET /history/continue`，首页显示最近一条。

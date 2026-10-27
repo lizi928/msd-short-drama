@@ -87,10 +87,10 @@ public class HybridRetriever implements DocumentRetriever {
 
         // 3. 主线程统一写 trace，避免分支线程共享可变状态
         if (trace != null) {
-            trace.setVectorHits(vector.documents().size());
-            trace.setVectorMillis(vector.millis());
-            trace.setBm25Hits(bm25.documents().size());
-            trace.setBm25Millis(bm25.millis());
+            trace.addVectorHits(vector.documents().size());
+            trace.addVectorMillis(vector.millis());
+            trace.addBm25Hits(bm25.documents().size());
+            trace.addBm25Millis(bm25.millis());
             if (vector.error() != null) {
                 trace.markDegraded("vector");
             }
@@ -105,14 +105,14 @@ public class HybridRetriever implements DocumentRetriever {
             log.warn("bm25 retrieval degraded: {}", bm25.error());
         }
 
-        // 4. RRF 融合并截断
+        // 4. RRF 融合并截断；多查询时先按单 query 的召回上限裁剪
         List<Document> merged = rrfMerger.merge(
                 vector.documents(),
                 bm25.documents(),
                 properties.getHybrid().getRrfK(),
-                properties.getHybrid().getTopK());
+                retrievalTopK(properties.getHybrid().getTopK()));
         if (trace != null) {
-            trace.setRrfHits(merged.size());
+            trace.addRrfHits(merged.size());
         }
 
         log.info("hybrid retrieval: query='{}', episodeScope={}, vectorHits={}, bm25Hits={}, "
@@ -128,7 +128,7 @@ public class HybridRetriever implements DocumentRetriever {
     private BranchResult vectorBranch(String text, RetrievalScope scope) {
         long startedAt = System.currentTimeMillis();
         try {
-            int topK = properties.getVector().getTopK();
+            int topK = retrievalTopK(properties.getVector().getTopK());
             List<Document> documents = scope.episodeScope()
                     ? milvusProvider.searchEpisodes(
                             text, scope.dramaId(), scope.beforeEpisodeNo(), topK)
@@ -147,7 +147,7 @@ public class HybridRetriever implements DocumentRetriever {
     private BranchResult bm25Branch(String text, RetrievalScope scope) {
         long startedAt = System.currentTimeMillis();
         try {
-            int topK = properties.getBm25().getTopK();
+            int topK = retrievalTopK(properties.getBm25().getTopK());
             List<Document> documents = scope.episodeScope()
                     ? bm25Store.searchEpisodes(
                             text, scope.dramaId(), scope.beforeEpisodeNo(), topK)
@@ -158,6 +158,16 @@ public class HybridRetriever implements DocumentRetriever {
             return new BranchResult(List.of(), System.currentTimeMillis() - startedAt,
                     rootMessage(e));
         }
+    }
+
+    /**
+     * 多查询扩展开启时，每条 query 只召回配置的条数，控制下游成本。
+     */
+    private int retrievalTopK(int configured) {
+        if (properties.getExpansion() != null && properties.getExpansion().isEnabled()) {
+            return Math.max(properties.getExpansion().getPerQueryTopK(), 1);
+        }
+        return Math.max(configured, 1);
     }
 
     /**

@@ -139,6 +139,7 @@ loadBalance()
         <PageHeader title="充值中心" back-to="/me"/>
 
         <main class="app-main recharge-page">
+            <div class="recharge-main">
             <section class="balance-card">
                 <div class="balance-copy">
                     <span class="eyebrow">当前积分</span>
@@ -188,8 +189,9 @@ loadBalance()
                     演示环境：点击后直接模拟支付成功，不会调用真实支付渠道。
                 </p>
             </section>
+            </div>
 
-            <section class="section-block">
+            <section class="section-block recharge-history">
                 <div class="section-title">
                     <h2>积分流水</h2>
                     <button class="text-btn" type="button" @click="refreshLedger">刷新</button>
@@ -237,6 +239,11 @@ loadBalance()
 
 <style scoped>
 .recharge-page {
+    display: grid;
+    gap: 16px;
+}
+
+.recharge-main {
     display: grid;
     gap: 16px;
 }
@@ -413,6 +420,57 @@ loadBalance()
     background: none;
     color: var(--brand-2);
     font-size: 11px;
+}
+
+/* ---------- 桌面端（≥1024）：左侧充值，右侧流水 ---------- */
+
+@media (min-width: 1024px) {
+    .recharge-main {
+        gap: 20px;
+    }
+
+    .balance-card {
+        padding: 24px;
+    }
+
+    .balance-copy strong {
+        font-size: 42px;
+    }
+
+    .plan-grid {
+        gap: 14px;
+    }
+
+    .plan-card {
+        padding: 22px 12px 16px;
+    }
+
+    .plan-price {
+        font-size: 26px;
+    }
+
+    .recharge-history {
+        position: sticky;
+        top: calc(var(--topbar-height) + 24px);
+    }
+
+    .ledger-row {
+        padding: 14px 16px;
+    }
+}
+
+/* 视口足够宽时才分两栏，避免 1024 下档位卡片过窄 */
+@media (min-width: 1280px) {
+    .recharge-page {
+        grid-template-columns: minmax(0, 1.1fr) minmax(400px, 0.9fr);
+        align-items: start;
+        gap: 24px;
+    }
+
+    .recharge-history {
+        position: sticky;
+        top: calc(var(--topbar-height) + 24px);
+    }
 }
 
 @media (max-width: 380px) {

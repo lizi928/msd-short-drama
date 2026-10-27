@@ -33,6 +33,7 @@ class InteractionServiceModerationTest {
             commentMapper,
             mock(WatchHistoryMapper.class),
             outboxEventMapper,
+            mock(CommentCache.class),
             JsonMapper.shared());
 
     /**
@@ -57,13 +58,13 @@ class InteractionServiceModerationTest {
      * 隐藏回复时减少根评论回复数，并只写一条事件。
      */
     @Test
-    void hidesReplyAndDecrementsRoot() {
+    void hidesReplyWithoutSynchronousCounter() {
         when(commentMapper.selectById(8336L)).thenReturn(comment(8336L, 1004L, 8335L, 1));
         when(commentMapper.adminHide(8336L)).thenReturn(1);
 
         service.adminHideComment(8336L);
 
-        verify(commentMapper).decrementReplyCount(8335L);
+        verify(commentMapper, never()).decrementReplyCount(8335L);
         verify(outboxEventMapper, times(1)).insert(any(OutboxEvent.class));
     }
 

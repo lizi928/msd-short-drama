@@ -71,4 +71,10 @@ public final class RagMetadata {
     public static final String BM25_RANK = "bm25Rank";
     /** Rerank 精排分数。 */
     public static final String RERANK_SCORE = "rerankScore";
+    /** 跨查询 RRF 分数。 */
+    public static final String MULTI_QUERY_SCORE = "multiQueryScore";
+    /** 文档首次命中的查询排名，从 1 开始。 */
+    public static final String QUERY_RANK = "queryRank";
+    /** 命中的查询数量。 */
+    public static final String QUERY_HITS = "queryHits";
 }

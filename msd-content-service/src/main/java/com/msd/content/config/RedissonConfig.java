@@ -4,20 +4,17 @@ import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.util.StringUtils;
 
 /**
- * AI 伴看会话记忆使用的 Redisson 客户端，连接参数复用 spring.data.redis.*。
+ * AI 伴看记忆与 RAG 偏好缓存共用的 Redisson 客户端，连接参数复用 spring.data.redis.*。
  *
- * <p>Bean 懒加载：Redis 未启动时服务仍能启动，记忆读写失败时 fail-open。</p>
+ * <p>Bean 懒加载：Redis 未启动时服务仍能启动，记忆/画像读写失败时 fail-open。</p>
  */
 @Configuration
-@ConditionalOnProperty(prefix = "msd.ai.companion", name = "enabled",
-        havingValue = "true", matchIfMissing = true)
 public class RedissonConfig {
 
     /**

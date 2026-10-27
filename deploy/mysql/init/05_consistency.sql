@@ -122,7 +122,8 @@ CREATE TABLE IF NOT EXISTS `t_event_consume_log` (
     `topic`          VARCHAR(128)    NOT NULL                COMMENT 'Kafka Topic',
     `consumed_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '消费时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_group_event` (`consumer_group`, `event_id`)
+    UNIQUE KEY `uk_group_event` (`consumer_group`, `event_id`),
+    KEY `idx_event_id` (`event_id`)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_0900_ai_ci

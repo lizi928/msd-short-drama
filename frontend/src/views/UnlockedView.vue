@@ -68,6 +68,7 @@ function open(item) {
                             class="unlock-cover"
                             :seed="item.episodeId"
                             :title="item.episodeTitle"
+                            :src="item.dramaCoverUrl"
                             ratio="poster"
                         />
                         <span class="unlock-copy">
@@ -152,5 +153,33 @@ function open(item) {
     flex: none;
     color: var(--muted);
     font-size: 22px;
+}
+
+/* ---------- 桌面端（≥1024） ---------- */
+
+@media (min-width: 1024px) {
+    .unlock-list {
+        max-width: 900px;
+        gap: 12px;
+    }
+
+    .unlock-item {
+        padding: 14px 16px;
+    }
+
+    .unlock-cover {
+        width: 66px;
+    }
+
+    .unlock-copy strong {
+        font-size: 15px;
+    }
+}
+
+@media (min-width: 1280px) {
+    .unlock-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        max-width: none;
+    }
 }
 </style>

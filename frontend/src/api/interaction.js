@@ -29,6 +29,13 @@ export function unlikeTarget(targetType, targetId) {
 }
 
 /**
+ * 查询异步计数事件状态；eventId 来自点赞/收藏/评论写接口。
+ */
+export function fetchEventStatus(eventId) {
+    return request(`${BASE}/events/${eventId}`)
+}
+
+/**
  * 收藏短剧。
  */
 export function favoriteDrama(dramaId) {

@@ -1,7 +1,23 @@
 # 码上短剧短剧服务配置
 # 由 scripts/init-nacos-config.py 发布到 Nacos
 # namespace=mashang-duanju-{{ENV}}, group=DEFAULT_GROUP, dataId=msd-drama.yaml
+spring:
+  datasource:
+    hikari:
+      # 互动计数消费与首页查询并发，连接池单独放大
+      maximum-pool-size: 20
+  kafka:
+    consumer:
+      # 公共配置默认 earliest；计数消费组从最新开始，避免回放旧事件重复计数
+      auto-offset-reset: latest
+
 msd:
+  kafka:
+    drama-concurrency: 6
+  interaction:
+    batch-consumer:
+      # 默认逐条消费；压测确认热点行瓶颈后再切 true
+      enabled: false
   cache:
     enabled: true
     max-size: 20000

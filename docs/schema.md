@@ -14,7 +14,7 @@
 | 枚举 | `TINYINT UNSIGNED`，取值见第 4 节 |
 | 外键 | 不建外键，关联 ID 由应用层校验 |
 | 逻辑删除 | 仅 `t_drama` 使用 `deleted`；用户用 `status`，评论用 `status`，互动关系物理删除 |
-| 缓存计数 | 冗余在短剧/剧集/评论行上，写入时同步更新 |
+| 缓存计数 | 冗余在短剧/剧集/评论行上，互动反馈由 Kafka 消费者异步更新 |
 
 ## 2. ER 概览
 
@@ -129,10 +129,12 @@ erDiagram
 
 ### 5.3 互动
 
-- 互动明细和 outbox 写入在同一个本地事务；接口立即返回，不等待计数。
+- 互动明细和 outbox 写入在同一个本地事务；接口立即返回，不等待计数。评论正文同步落库，点赞/回复计数异步派生。
 - 冗余计数由 Kafka 消费者异步更新，目标是最终一致；outbox relay 至少一次投递，消费端用 `t_event_consume_log(consumer_group, event_id)` 幂等。
-- outbox relay 每秒扫描 `status=0 AND next_retry_time<=NOW(3)` 的事件，发送成功置 `status=1`；失败递增 `retry_count`，按 `min(2^retry, 60)` 秒退避，超过 `msd.outbox.max-retry` 置 `status=2`（死信）。
-- 消费日志插入和计数更新在同一个数据库事务内；监听器失败会回滚并重试，重试 3 次后进入 `msd.interaction.dlq.v1`。
+- outbox relay 用短事务认领 `status=0 AND next_retry_time<=NOW(3)` 的事件，写入 `claim_token/locked_until(60s)`，事务外并行发送；发送成功置 `status=1`，失败按 `min(2^retry, 60)` 秒退避，超过 `msd.outbox.max-retry` 置 `status=2`（死信）。
+- `markSent/markRetry/markDead` 都带 claim token 条件；实例崩溃后租约过期可被重新认领。`user_id` 用于事件状态归属校验。
+- `t_comment.client_request_id` 与 `user_id` 组成唯一键，重复评论请求返回已有 `commentId`，不重复写事件。
+- 消费日志插入和计数更新在同一个数据库事务内；监听器失败会回滚并重试，重试 3 次后进入 `msd.interaction.dlq.v1`。`msd-interaction-counter-v1` 从 latest 启动。
 - 事件 topic 与分区键：
 
 | 事件 | Topic | Key |

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import { createComment, deleteComment, fetchReplies } from '../../api/interaction'
+import { useInteractionAck } from '../../composables/useInteractionAck'
 import { useAuthStore } from '../../stores/auth'
 import { useToastStore } from '../../stores/toast'
 import { usePagedList } from '../../composables/usePagedList'
@@ -55,9 +56,11 @@ const expanded = ref(false)
 const replyOpen = ref(false)
 const replyTarget = ref(null)
 const submitting = ref(false)
+const pendingRequestId = ref('')
 const composerRef = ref(null)
 const deleteTarget = ref(null)
 const deleting = ref(false)
+const ack = useInteractionAck()
 
 const confirmVisible = computed({
     get: () => Boolean(deleteTarget.value),
@@ -94,6 +97,16 @@ function cancelReply() {
 }
 
 /**
+ * 生成评论请求幂等键；重试时复用，避免重复回复。
+ */
+function newRequestId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID()
+    }
+    return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+/**
  * 回复成功后在当前线程内追加，并同步根评论回复数。
  */
 async function submitReply(content) {
@@ -101,17 +114,22 @@ async function submitReply(content) {
         return
     }
     submitting.value = true
+    if (!pendingRequestId.value) {
+        pendingRequestId.value = newRequestId()
+    }
     const target = replyTarget.value || props.root
     const payload = {
         dramaId: Number(props.dramaId),
         episodeId: props.episodeId === null ? undefined : Number(props.episodeId),
         rootId: props.root.commentId,
         parentId: target.commentId,
-        content
+        content,
+        clientRequestId: pendingRequestId.value
     }
 
     try {
         const result = await createComment(payload)
+        pendingRequestId.value = ''
         const view = {
             commentId: result.commentId,
             dramaId: payload.dramaId,
@@ -137,6 +155,16 @@ async function submitReply(content) {
         }
         appendReply(view)
         replyTotal.value = Number(props.root.replyCount || 0)
+        if (result.eventId) {
+            ack.track(result.eventId, {
+                onDead: () => {
+                    removeReplyLocal(result.commentId)
+                    props.root.replyCount = Math.max(0, Number(props.root.replyCount || 0) - 1)
+                    replyTotal.value = Number(props.root.replyCount || 0)
+                    toast.push('回复同步失败，已移除本地回复')
+                }
+            })
+        }
         composerRef.value?.clear()
         cancelReply()
         toast.success('回复成功')
