@@ -1,6 +1,6 @@
 # 码上短剧
 
-微服务 + AI 短剧平台。0.1-0.4、2.1-2.6、**分布式事务与异步解耦（数据一致性）**、**RAG 内容推荐**、**首页多级缓存与 Java 21 虚拟线程**、**AI 伴看与结构化审核**模块已完成并验证；Vue 3 + Vite 前端已接入登录、首页（含继续观看、个性化推荐）、详情、播放/解锁、互动、个人中心、充值中心、创作者工作台、审核台和 AI 伴看面板。剩余功能与分阶段计划见 [docs/roadmap.md](docs/roadmap.md)。
+微服务 + AI 短剧平台。0.1-0.4、2.1-2.6、**分布式事务与异步解耦（数据一致性）**、**RAG 内容推荐**、**首页多级缓存与 Java 21 虚拟线程**、**AI 伴看与结构化审核**、**RexUniNLU 情感/标签建议**模块已完成并验证；Vue 3 + Vite 前端已接入登录、首页（含继续观看、个性化推荐）、详情、播放/解锁、互动、个人中心、充值中心、创作者工作台、审核台和 AI 伴看面板。剩余功能与分阶段计划见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 技术基线
 
@@ -9,6 +9,7 @@
 - Spring Cloud 2025.1.3
 - Spring Cloud Alibaba 2025.1.0.0
 - Spring AI 2.0.1（DeepSeek 对话 / `qwen3.7-text-embedding-flash` / `qwen3.7-text-rerank` / Milvus + Elasticsearch 8）
+- Python 3.11 + FastAPI + RexUniNLU（达摩院 zero-shot 情感/标签建议，本地 CPU sidecar）
 - Micrometer Tracing 1.6.7 + Brave（全链路追踪，上报 Zipkin）
 - MySQL 8.0.45（本机，业务库 `DL`，不容器化）
 - Redis 7.2.14 / Kafka 4.1.2（KRaft）在虚拟机 `192.168.33.129`
@@ -25,7 +26,8 @@
 | `msd-order` | 8103 | 充值下单、模拟支付、积分账户/流水、剧集解锁、已解锁列表 |
 | `msd-interaction` | 8104 | 点赞、收藏、评论、评论治理、观看历史、继续观看、outbox |
 | `msd-agent-service` | 8105 / 8106 | AI Agent / AgentScope Supervisor（8105，含 companion-agent）；audit A2A 服务（8106，`audit` profile） |
-| `msd-content-service` | 8107 | RAG 推荐、个性化推荐、多查询扩展、AI 伴看、分集摘要、结构化审核；Milvus + ES 混合检索、Rerank |
+| `msd-content-service` | 8107 | RAG 推荐、个性化推荐、多查询扩展、AI 伴看、分集摘要、结构化审核、Rex 情感/标签建议；Milvus + ES 混合检索、Rerank |
+| `rex-uninlu-service` | 8108 | RexUniNLU 本地 sidecar：短剧情感分析、标签建议，仅 advisory、fail-open |
 
 > 冒烟模块 `msd-infra-smoke` 与原始 Nacos 示例 `msd-demo` 在 0.4 验证通过后已删除，仓库只保留生产代码。验证结论与可复用配置见 [docs/chapter-0-baseline.md](docs/chapter-0-baseline.md)。
 
@@ -60,6 +62,11 @@ java -jar msd-drama/target/msd-drama-1.0.0-SNAPSHOT.jar
 java -jar msd-order/target/msd-order-1.0.0-SNAPSHOT.jar
 java -jar msd-interaction/target/msd-interaction-1.0.0-SNAPSHOT.jar
 java -jar msd-agent-service/target/msd-agent-service-1.0.0-SNAPSHOT.jar
+
+# RexUniNLU sidecar（可选，8108；首次先执行 setup）
+scripts\setup-rex-uninlu.cmd
+scripts\start-rex-uninlu.cmd
+
 java -jar msd-content-service/target/msd-content-service-1.0.0-SNAPSHOT.jar
 
 # audit A2A 服务（可选，另开终端；8106）
@@ -124,7 +131,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/user/internal/p
 
 生产环境通过 `MSD_JWT_SECRET` 覆盖默认密钥，至少 32 字节。CORS 开发环境允许所有来源，生产需改成具体域名。
 
-> 直连 8101-8107 会绕过网关鉴权，生产只暴露网关端口。
+> 直连 8101-8108 会绕过网关鉴权，生产只暴露网关端口；8108 只绑定 127.0.0.1。
 
 ## 短剧浏览接口
 
@@ -270,10 +277,11 @@ mvn -B -U -T 1C clean package -DskipTests
 | 文档 | 内容 |
 |---|---|
 | [docs/roadmap.md](docs/roadmap.md) | 剩余功能路线图：伴看前端、审核、充值、搜索、内容后台与生产化 |
-| [docs/architecture.svg](docs/architecture.svg) | 当前项目架构图（含 RAG、伴看与审核） |
+| [docs/architecture.svg](docs/architecture.svg) | 当前项目架构图（含 P1 个性化/多查询、P2 路由/沙箱、P3 异步互动、RexUniNLU advisory 细节） |
 | [docs/runbook.md](docs/runbook.md) | 本地启动顺序、命令、排障 |
 | [docs/test-data.md](docs/test-data.md) | AI 短剧测试数据：来源、媒体上传、布隆刷新与清理 |
 | [docs/rag.md](docs/rag.md) | RAG 推荐架构、五段链路、API、配置与降级 |
+| [docs/rex-uninlu.md](docs/rex-uninlu.md) | RexUniNLU 情感/标签建议：模型、API、分片聚合、依赖兼容与降级 |
 | [docs/recharge.md](docs/recharge.md) | 积分充值、模拟支付、订单幂等与积分流水 |
 | [docs/creator.md](docs/creator.md) | 创作者工作台、管理端审核、审核操作日志 |
 | [docs/moderation.md](docs/moderation.md) | 评论治理、首页继续观看、已解锁剧集 |
@@ -459,6 +467,25 @@ curl http://127.0.0.1:8107/internal/ai/rag/status
 - Milvus 2.6.x 的 `common.storageType` 使用 `remote`；`minio` 已废弃，会导致写入 panic。
 - 完整架构、配置、验收和排障见 [docs/rag.md](docs/rag.md)。
 
+## RexUniNLU 情感审核与标签建议
+
+`msd-content-service` 在短剧 AI 审核时并行调用本地 RexUniNLU sidecar（8108）：
+
+- 情感：`positive/negative/mixed/unknown`，负向支持数达到 2/3 片时给出“建议人工复核”；
+- 标签：从 drama 启用标签字典提取，最多 5 个，仅作为审核建议；
+- 边界：只写 `t_drama.ai_review_result.advisory`，不写 `t_drama_tag_rel`，不改变 `ai_review_status`；
+- 降级：sidecar 未启动、超时或解析失败时审核继续，advisory 标记 degraded。
+
+```bash
+scripts\setup-rex-uninlu.cmd   # 首次：venv + CPU torch + 模型下载
+scripts\start-rex-uninlu.cmd   # 启动 8108
+curl http://127.0.0.1:8108/readyz
+curl -X POST http://127.0.0.1:8107/internal/ai/audit/dramas/5003
+```
+
+模型 `iic/nlp_deberta_rex-uninlu-chinese-base@v1.0.2`（Apache 2.0），权重不进入 git。
+完整 API、分片/聚合、依赖兼容、性能和失败演练见 [docs/rex-uninlu.md](docs/rex-uninlu.md)。
+
 ## 分布式链路追踪
 
 6 个服务统一使用 Micrometer Tracing + Brave，上报到 Zipkin。网关到下游用 W3C `traceparent` 透传，Feign 调用由 `feign-micrometer` 自动创建 client span。
@@ -566,6 +593,15 @@ D:/kafka_2.13-4.1.2/bin/windows/kafka-consumer-groups.bat \
 - 压测清理：416 条 `[load-test]` 评论通过删除接口清理，9 个测试短剧点赞取消；专用压测用户 9998 无残留点赞/评论。
 - 对账说明：本地演示 seed 的 like/favorite/comment 是合成基数，`check-interaction-consistency.sql` 会报告预期差异；生产数据或先重建计数后才有对账意义。
 
+## RexUniNLU 联调结果（2026-10-27）
+
+- 回归：Python `pytest` **23 passed**；`mvn -B -pl msd-content-service,msd-drama -am test` **196 tests、0 failures**；前端构建通过。
+- 真实模型：5003 审核返回 `aiReviewStatus=2`，`ai_review_result.advisory` 含情感 `negative`、`highNegative=true` 和标签建议，JSON 长度 697。
+- 失败演练：停止 8108 后再次审核 5003，`aiReviewStatus` 仍为 2，advisory 为 `degraded=true / rex_unavailable`；内容服务不重启。
+- 数据边界：只写 `t_drama.ai_review_result.advisory`，不写 `t_drama_tag_rel`，不触发详情缓存失效或 RAG reindex。
+- 性能：典型单片段约 0.2s；5000 字、6 片、12 个标签候选实测约 5.2s，低于 7s 分析预算。
+- 兼容性：官方 wrapper 的本地方向、special token 顺序、JDK HTTP/2 升级、`pyarrow`/NumPy 冲突均已处理，详见 [docs/rex-uninlu.md](docs/rex-uninlu.md#6-兼容性陷阱)。
+
 ## 数据库初始化
 
 ```bash
@@ -591,6 +627,7 @@ scripts\init-db.cmd
 | Elasticsearch | 9200 | 容器（只绑 `127.0.0.1`） |
 | MinIO | 9000/9001 | 容器 |
 | `msd-content-service` | 8107 | 本机服务 |
+| `rex-uninlu-service` | 8108 | 本机 Python sidecar（可选） |
 | xxl-job-admin | 8088 | 容器 |
 | Sentinel Dashboard | 8858 | 容器（只绑 `127.0.0.1`） |
 | Zipkin | 9411 | 容器（只绑 `127.0.0.1`） |

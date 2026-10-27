@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 短剧 AI 审核编排。
@@ -44,22 +45,28 @@ public class DramaReviewAuditService {
     private static final String FLAG_EMPTY_CONTENT = "audit_empty_content";
     /** 降级标记：审核结果序列化失败。 */
     private static final String FLAG_SERIALIZE = "audit_serialize_error";
+    /** 写回 JSON 上限，为 drama 侧 8000 字限制留出余量。 */
+    private static final int MAX_RESULT_CHARS = 7_800;
 
     // 短剧审核内部客户端
     private final DramaReviewClient reviewClient;
     // 结构化审核服务
     private final StructuredAuditService auditService;
+    // Rex 情感/标签建议
+    private final RexAdvisoryService rexAdvisoryService;
     // Jackson 3 JSON 序列化
     private final JsonMapper jsonMapper;
 
     /**
-     * 注入审核客户端、审核服务和 JSON 序列化器。
+     * 注入审核客户端、审核服务、Rex 建议服务和 JSON 序列化器。
      */
     public DramaReviewAuditService(DramaReviewClient reviewClient,
                                    StructuredAuditService auditService,
+                                   RexAdvisoryService rexAdvisoryService,
                                    JsonMapper jsonMapper) {
         this.reviewClient = reviewClient;
         this.auditService = auditService;
+        this.rexAdvisoryService = rexAdvisoryService;
         this.jsonMapper = jsonMapper;
     }
 
@@ -158,7 +165,11 @@ public class DramaReviewAuditService {
         Long dramaId = candidate.dramaId();
         String content = buildContent(candidate);
 
-        // 2. 内容为空时按失败处理，避免模型凭空审核
+        // 2. 先启动 Rex 建议，与合规调用并行；内容为空时跳过
+        CompletableFuture<DramaReviewAdvisory> advisoryFuture =
+                startAdvisory(content, dramaId);
+
+        // 3. 内容为空时按失败处理，避免模型凭空审核
         AuditCheckResponse response;
         if (content.isBlank()) {
             response = new AuditCheckResponse(null, true, List.of(FLAG_EMPTY_CONTENT), 0);
@@ -173,24 +184,27 @@ public class DramaReviewAuditService {
             }
         }
 
-        // 3. 降级写 4，违规写 3，未违规写 2；绝不因降级写通过
+        // 4. 降级写 4，违规写 3，未违规写 2；Rex 建议不参与状态映射
         int status = response.degraded() || response.verdict() == null
                 ? 4 : (response.verdict().isViolation() ? 3 : 2);
 
-        // 4. 序列化完整结果，包含场景、结论和降级标记
+        // 5. 有界等待建议；失败只写降级 advisory，不改变合规状态
+        DramaReviewAdvisory advisory = awaitAdvisory(advisoryFuture, dramaId);
+
+        // 6. 序列化完整结果；超限时按证据、标签、建议逐级裁剪
         String json;
         try {
-            json = jsonMapper.writeValueAsString(new DramaAiReviewResult(
+            json = serializeResult(new DramaAiReviewResult(
                     SCENE, response.verdict(), response.degraded(),
                     response.degradedFlags(), response.elapsedMs(),
-                    OffsetDateTime.now().toString()));
+                    OffsetDateTime.now().toString(), advisory));
         } catch (Exception e) {
             log.warn("drama review result serialize failed: dramaId={}, error={}",
                     dramaId, rootMessage(e));
             return new DramaReviewAuditItem(dramaId, 4, false, List.of(FLAG_SERIALIZE));
         }
 
-        // 5. 条件写回；人工审核已推进时 updated=false
+        // 7. 条件写回；人工审核已推进时 updated=false
         boolean updated = false;
         try {
             Result<Boolean> writeback = reviewClient.writeAiResult(
@@ -203,6 +217,66 @@ public class DramaReviewAuditService {
         }
         return new DramaReviewAuditItem(
                 dramaId, status, updated, response.degradedFlags());
+    }
+
+    /**
+     * 启动异步建议；任何异常都转为降级建议。
+     */
+    private CompletableFuture<DramaReviewAdvisory> startAdvisory(String content, Long dramaId) {
+        if (content.isBlank()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        try {
+            return rexAdvisoryService.analyzeAsync(content, dramaId);
+        } catch (Exception e) {
+            log.warn("drama rex advisory start failed: dramaId={}, error={}",
+                    dramaId, rootMessage(e));
+            return CompletableFuture.completedFuture(
+                    DramaReviewAdvisory.degraded("rex_unavailable", 0));
+        }
+    }
+
+    /**
+     * 有界等待建议；超时或异常只返回降级建议。
+     */
+    private DramaReviewAdvisory awaitAdvisory(
+            CompletableFuture<DramaReviewAdvisory> future, Long dramaId) {
+        if (future == null) {
+            return null;
+        }
+        try {
+            return rexAdvisoryService.await(future, rexAdvisoryService.joinTimeoutMs());
+        } catch (Exception e) {
+            log.warn("drama rex advisory await failed: dramaId={}, error={}",
+                    dramaId, rootMessage(e));
+            return DramaReviewAdvisory.degraded("rex_unavailable", 0);
+        }
+    }
+
+    /**
+     * 序列化审核结果，超限时逐级裁剪 advisory。
+     */
+    private String serializeResult(DramaAiReviewResult result) throws Exception {
+        String json = jsonMapper.writeValueAsString(result);
+        if (json.length() <= MAX_RESULT_CHARS) {
+            return json;
+        }
+        DramaReviewAdvisory advisory = result.advisory();
+        if (advisory != null) {
+            json = jsonMapper.writeValueAsString(result.withAdvisory(advisory.withoutEvidence()));
+            if (json.length() <= MAX_RESULT_CHARS) {
+                return json;
+            }
+            json = jsonMapper.writeValueAsString(result.withAdvisory(advisory.withoutTags()));
+            if (json.length() <= MAX_RESULT_CHARS) {
+                return json;
+            }
+            json = jsonMapper.writeValueAsString(result.withAdvisory(null));
+            if (json.length() <= MAX_RESULT_CHARS) {
+                return json;
+            }
+        }
+        throw new IllegalStateException("AI review result exceeds " + MAX_RESULT_CHARS + " chars");
     }
 
     /**

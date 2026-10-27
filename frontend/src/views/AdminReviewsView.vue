@@ -96,31 +96,109 @@ function aiLabel(status) {
     return AI_LABELS[Number(status)] || 'AI 未知'
 }
 
+const SENTIMENT_LABELS = {
+    positive: '正向',
+    negative: '负向',
+    mixed: '混合',
+    unknown: '未知'
+}
+
+/**
+ * 解析审核结果 JSON；旧数据或损坏数据返回 null。
+ */
+function parseAiResult(item) {
+    if (!item.aiReviewResult) {
+        return null
+    }
+    try {
+        return JSON.parse(item.aiReviewResult)
+    } catch {
+        return null
+    }
+}
+
 /**
  * 把审核结果 JSON 转成简短可读文本。
  */
 function aiSummary(item) {
-    if (!item.aiReviewResult) {
-        return '尚未执行 AI 审核'
+    const payload = parseAiResult(item)
+    if (!payload) {
+        return item.aiReviewResult ? item.aiReviewResult.slice(0, 100) : '尚未执行 AI 审核'
     }
-    try {
-        const payload = JSON.parse(item.aiReviewResult)
-        if (payload.degraded) {
-            const flags = Array.isArray(payload.degradedFlags) ? payload.degradedFlags : []
-            return `AI 降级：${flags.join('、') || '未知原因'}`
-        }
-        const verdict = payload.verdict
-        if (!verdict) {
-            return 'AI 未返回有效结论'
-        }
-        if (verdict.is_violation) {
-            const tags = Array.isArray(verdict.tags) ? verdict.tags.join('、') : ''
-            return `违规：${verdict.violation_reason || '未说明'}${tags ? `（${tags}）` : ''}`
-        }
-        return '未发现违规'
-    } catch {
-        return item.aiReviewResult.slice(0, 100)
+    if (payload.degraded) {
+        const flags = Array.isArray(payload.degradedFlags) ? payload.degradedFlags : []
+        return `AI 降级：${flags.join('、') || '未知原因'}`
     }
+    const verdict = payload.verdict
+    if (!verdict) {
+        return 'AI 未返回有效结论'
+    }
+    if (verdict.is_violation) {
+        const tags = Array.isArray(verdict.tags) ? verdict.tags.join('、') : ''
+        return `违规：${verdict.violation_reason || '未说明'}${tags ? `（${tags}）` : ''}`
+    }
+    return '未发现违规'
+}
+
+/**
+ * 读取 Rex 情感/标签建议；旧审核记录没有该字段。
+ */
+function aiAdvisory(item) {
+    const payload = parseAiResult(item)
+    const advisory = payload?.advisory
+    return advisory && typeof advisory === 'object' ? advisory : null
+}
+
+/**
+ * 情感展示文案。
+ */
+function sentimentText(advisory) {
+    return SENTIMENT_LABELS[advisory?.sentiment?.label] || '未知'
+}
+
+/**
+ * 情感 chip 样式。
+ */
+function sentimentClass(advisory) {
+    const label = advisory?.sentiment?.label
+    return label && SENTIMENT_LABELS[label] ? `is-${label}` : ''
+}
+
+/**
+ * 建议标签名称列表。
+ */
+function tagNames(advisory) {
+    const tags = Array.isArray(advisory?.tags) ? advisory.tags : []
+    return tags.map((tag) => tag?.name).filter(Boolean)
+}
+
+/**
+ * 情感证据，作为 chip 的 title。
+ */
+function sentimentTitle(advisory) {
+    const evidence = advisory?.sentiment?.evidence
+    return Array.isArray(evidence) && evidence.length
+        ? `证据：${evidence.join('；')}`
+        : 'AI 内容情感倾向（仅供参考）'
+}
+
+/**
+ * 标签证据，作为标签文案的 title。
+ */
+function tagsTitle(advisory) {
+    const tags = Array.isArray(advisory?.tags) ? advisory.tags : []
+    const details = tags.map((tag) => {
+        const evidence = Array.isArray(tag?.evidence) ? tag.evidence : []
+        return evidence.length ? `${tag.name}：${evidence.join('；')}` : tag?.name
+    }).filter(Boolean)
+    return details.length ? details.join('\n') : '仅作为审核建议'
+}
+
+/**
+ * 部分片段失败时提示，不把建议当作完整结论。
+ */
+function isPartialAdvisory(advisory) {
+    return !advisory?.degraded && Number(advisory?.failedChunks) > 0
 }
 
 /**
@@ -293,9 +371,51 @@ async function rebuildIndex() {
                             <span>{{ item.submitTime ? formatDateTime(item.submitTime) : '未提交' }}</span>
                         </div>
 
-                        <p class="ai-summary" :class="{ degraded: item.aiReviewStatus === 4 }">
-                            {{ aiSummary(item) }}
-                        </p>
+                        <div class="ai-review">
+                            <p class="ai-summary" :class="{ degraded: item.aiReviewStatus === 4 }">
+                                {{ aiSummary(item) }}
+                            </p>
+                            <div v-if="aiAdvisory(item)" class="ai-advisory">
+                                <span
+                                    class="adv-chip"
+                                    :class="sentimentClass(aiAdvisory(item))"
+                                    :title="sentimentTitle(aiAdvisory(item))"
+                                >
+                                    情感：{{ sentimentText(aiAdvisory(item)) }}
+                                </span>
+                                <span
+                                    v-if="aiAdvisory(item).sentiment?.highNegative"
+                                    class="adv-chip is-danger"
+                                >
+                                    建议人工复核
+                                </span>
+                                <span
+                                    v-if="tagNames(aiAdvisory(item)).length"
+                                    class="adv-tags"
+                                    :title="tagsTitle(aiAdvisory(item))"
+                                >
+                                    建议标签：{{ tagNames(aiAdvisory(item)).join('、') }}（仅供参考）
+                                </span>
+                                <span
+                                    v-if="isPartialAdvisory(aiAdvisory(item))"
+                                    class="adv-note"
+                                >
+                                    部分片段未分析
+                                </span>
+                                <span
+                                    v-if="aiAdvisory(item).truncated"
+                                    class="adv-note"
+                                >
+                                    文本较长，仅分析前部
+                                </span>
+                                <span
+                                    v-if="aiAdvisory(item).degraded"
+                                    class="adv-note is-warning"
+                                >
+                                    情感分析暂不可用
+                                </span>
+                            </div>
+                        </div>
 
                         <div class="review-actions">
                             <button
@@ -503,6 +623,12 @@ async function rebuildIndex() {
     font-size: 10px;
 }
 
+.ai-review {
+    display: grid;
+    min-width: 0;
+    gap: 6px;
+}
+
 .ai-summary {
     margin: 0;
     padding: 8px 10px;
@@ -516,6 +642,61 @@ async function rebuildIndex() {
 
 .ai-summary.degraded {
     border-color: rgba(255, 92, 61, 0.3);
+    color: var(--brand-2);
+}
+
+.ai-advisory {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.adv-chip {
+    flex: none;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.6;
+}
+
+.adv-chip.is-positive {
+    border-color: rgba(71, 209, 140, 0.45);
+    color: var(--ok);
+}
+
+.adv-chip.is-negative {
+    border-color: rgba(255, 92, 61, 0.4);
+    color: var(--danger);
+}
+
+.adv-chip.is-mixed {
+    border-color: rgba(255, 179, 63, 0.45);
+    color: var(--brand-2);
+}
+
+.adv-chip.is-danger {
+    border-color: rgba(255, 92, 61, 0.55);
+    background: rgba(255, 92, 61, 0.1);
+    color: var(--danger);
+}
+
+.adv-tags {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.6;
+}
+
+.adv-note {
+    color: rgba(255, 255, 255, 0.36);
+    font-size: 10px;
+    line-height: 1.6;
+}
+
+.adv-note.is-warning {
     color: var(--brand-2);
 }
 
@@ -630,9 +811,10 @@ async function rebuildIndex() {
         flex-wrap: nowrap;
     }
 
-    .ai-summary {
+    .ai-review {
         grid-column: 2;
         grid-row: 1 / span 2;
+        align-self: center;
     }
 
     .review-actions {

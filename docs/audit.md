@@ -142,6 +142,7 @@ AI 审核只在 `review_status=1` 时写回 `ai_review_status`：
 |---|---|---|
 | GET | `/internal-source/reviews/pending?limit=20` | 待 AI 审核候选，`review_status=1` 且 AI 状态 0/1/null |
 | GET | `/internal-source/reviews/{dramaId}` | 待审详情，非待审返回 `data=null` |
+| GET | `/internal-source/reviews/tag-dictionary` | 启用中的标签名称，供 Rex 标签建议只读使用 |
 | PUT | `/internal-source/reviews/{dramaId}/ai-result` | 条件写回，仅 `review_status=1` 生效 |
 
 写回请求：
@@ -158,7 +159,8 @@ AI 审核只在 `review_status=1` 时写回 `ai_review_status`：
 | POST | `/internal/ai/audit/dramas/{dramaId}` | 审核单部待审短剧 |
 
 - 送审文本：标题 + 副标题 + 简介，截断 5000 字，`scene=drama_description`。
-- 降级写 4，违规写 3，未违规写 2；降级绝不写 2。
+- 合规调用 DeepSeek 的同时，并行调用本地 RexUniNLU sidecar（8108）生成情感/标签建议。
+- 降级写 4，违规写 3，未违规写 2；Rex 建议不参与状态映射，降级绝不写 2。
 - 单条失败不中断批次；写回 0 行计入 `skipped`。
 - 只允许直连 8107，网关不路由。
 
@@ -192,6 +194,10 @@ curl http://127.0.0.1:8102/internal-source/reviews/pending?limit=10
 # 2. AI 审核
 curl -X POST 'http://127.0.0.1:8107/internal/ai/audit/dramas/pending?limit=5'
 
+# 2.1 启动本地 RexUniNLU sidecar（可选；未启动时情感建议降级）
+scripts\start-rex-uninlu.cmd
+curl http://127.0.0.1:8108/readyz
+
 # 3. 查看 AI 结果
 curl http://127.0.0.1:8102/internal-source/reviews/5003
 
@@ -215,3 +221,25 @@ curl -H "Authorization: Bearer $USER_TOKEN" \
 - 5012 草稿提交 -> AI 通过 -> 管理员驳回，状态 3，驳回意见落库。
 - 5003 下架后公开详情 404。
 - `reset_review_demo.sql` 可恢复 5003/5012/5013 演示状态。
+
+### 7.6 RexUniNLU 情感/标签建议
+
+详细模型、API、依赖和性能见 [rex-uninlu.md](rex-uninlu.md)。
+
+- 模型：`iic/nlp_deberta_rex-uninlu_chinese-base@v1.0.2`，Apache 2.0，本地 CPU sidecar。
+- 输入：标题 + 副标题 + 简介；每 450 字一片，最多 6 片。
+- 情感：`positive/negative/mixed/unknown`；负向支持数 ≥ 2/3 片时 `highNegative=true`，
+  审核台显示“建议人工复核”。
+- 标签：来自 drama 启用标签字典，最多 5 个，按命中片数排序，只读展示。
+- 失败：sidecar 未启动、超时、非 2xx 或解析失败只写 degraded advisory；
+  `ai_review_status` 仍按合规结论写 2/3/4。
+- 数据边界：不新增数据库列，不写 `t_drama_tag_rel`，不触发缓存失效或 RAG reindex。
+- 回滚：Nacos `msd.ai.rex.enabled=false`，停止 8108；旧审核 JSON 无 `advisory` 仍可解析。
+
+失败演练：
+
+```bash
+# 停 sidecar 后重审，预期仍写 2，advisory degraded=true
+curl -X POST http://127.0.0.1:8107/internal/ai/audit/dramas/5003
+curl http://127.0.0.1:8102/internal-source/reviews/5003
+```

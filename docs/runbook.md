@@ -6,6 +6,7 @@
 2. 虚拟机 `192.168.33.129`：Redis、Kafka
 3. Docker Desktop
 4. `docker compose -f deploy/docker-compose.yml up -d`（Nacos / etcd / MinIO / Milvus / Elasticsearch / xxl-job-admin / Sentinel Dashboard / Zipkin / Seata Server，共 9 个容器）
+5. 可选：RexUniNLU sidecar（8108），首次先执行 `scripts\setup-rex-uninlu.cmd`，再执行 `scripts\start-rex-uninlu.cmd`
 
 应用侧连接参数与 AI 配置见 [chapter-0-baseline.md](chapter-0-baseline.md)。
 
@@ -499,6 +500,15 @@ curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
 - Milvus 停止时前情检索标记 `vector`，仅用 BM25；ES 停止时标记 `bm25`，仅用向量；两路都停止返回空前情并同时标记 `vector`、`bm25`，Agent 不得编造前情。
 - 分集索引未重建（ES 中该剧分集数为 0）时标记 `episode_index`，需要执行全量 reindex。
 - 伴看工具接口和审核接口只允许直连 8107，网关仅暴露 `/api/content/internal/ai/companion/chat`。
+- RexUniNLU 情感/标签建议默认启用；sidecar 未启动时审核仍正常，advisory 标记 `rex_unavailable`：
+
+```bash
+scripts\start-rex-uninlu.cmd
+curl http://127.0.0.1:8108/readyz
+# Nacos content-config.yaml 的 msd.ai.rex.enabled=false 可整体关闭
+```
+
+  模型、API、依赖兼容和失败演练见 [rex-uninlu.md](rex-uninlu.md)。
 - 审核演示前先重置 5003/5012/5013：
 
 ```bash
@@ -828,6 +838,9 @@ docker compose -f deploy/docker-compose.yml down
 | Nacos 控制台 404 | 3.x 控制台在 8080 的 `/`，不是 `8848/nacos` |
 | 应用连不上 Nacos | 确认 9848/9849 已映射；容器内用 `nacos:8848` |
 | xxl-job 访问 `/xxl-job-admin` 404 | 3.5.0 context-path 是 `/`，访问 `/auth/login` |
+| Rex sidecar `/readyz` 503 | 检查模型目录、`REX_UNINLU_MODEL_DIR`、依赖安装；`/healthz` 的 `last_error` 有加载异常 |
+| Rex 审核建议 `rex_protocol_error` | 检查 `X-Internal-Token` 是否与 sidecar 一致；内容服务 Rex 客户端必须使用 HTTP/1.1 |
+| Rex 分析慢或 partial | 5000 字 6 片实测约 5.2s；确认 `join-timeout-ms=7500`，必要时减少分片或标签候选 |
 | xxl-job 容器连不上 MySQL | 确认 `host.docker.internal` 可解析、`msd` 用户对 `xxl_job` 有权限 |
 | `Incorrect string value` 导入 xxl-job SQL | 加 `--default-character-set=utf8mb4` |
 | Milvus 未启动时应用启动失败 | `MilvusVectorStoreAutoConfiguration` 会强连 19530；先启动 Milvus，或临时排除 auto-config |

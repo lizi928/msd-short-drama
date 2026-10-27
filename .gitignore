@@ -46,6 +46,9 @@ frontend/logs/
 ### Python ###
 __pycache__/
 *.py[cod]
+.pytest_cache/
+rex-uninlu-service/.venv/
+rex-uninlu-service/models/
 
 ### Claude local ###
 .claude/settings_local.json

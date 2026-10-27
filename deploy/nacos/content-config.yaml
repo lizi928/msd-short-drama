@@ -76,6 +76,21 @@ msd:
       enabled: true
       timeout-ms: 10000
       max-attempts: 2
+    # RexUniNLU 情感/标签建议：本地 sidecar，失败只降级建议、不影响合规状态
+    rex:
+      enabled: true
+      base-url: http://127.0.0.1:8108
+      analyze-path: /v1/analyze
+      connect-timeout-ms: 1000
+      timeout-ms: 8000
+      join-timeout-ms: 7500
+      failure-backoff-ms: 30000
+      tag-cache-ms: 300000
+      max-tag-candidates: 30
+      max-tags: 5
+      internal-token: ${REX_UNINLU_INTERNAL_TOKEN:}
+      sentiment-labels: [正向情感, 负向情感]
+      default-tag-candidates: [逆袭, 甜宠, 重生, 复仇, 悬疑, 穿越, 学霸, 先婚后爱, 职场, 玄幻, 亲情, 搞笑]
     # AI 伴看：分集摘要和轻量模型
     companion:
       enabled: true

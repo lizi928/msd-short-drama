@@ -4,6 +4,7 @@ import com.msd.common.dto.DramaAiReviewResultRequest;
 import com.msd.common.dto.DramaReviewCandidateDTO;
 import com.msd.common.result.Result;
 import com.msd.drama.service.DramaReviewService;
+import com.msd.drama.service.DramaTagDictionaryService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,12 +28,25 @@ public class InternalDramaReviewController {
 
     // 短剧审核服务
     private final DramaReviewService reviewService;
+    // 标签字典服务
+    private final DramaTagDictionaryService tagDictionaryService;
 
     /**
-     * 注入短剧审核服务。
+     * 注入短剧审核服务和标签字典服务。
      */
-    public InternalDramaReviewController(DramaReviewService reviewService) {
+    public InternalDramaReviewController(DramaReviewService reviewService,
+                                         DramaTagDictionaryService tagDictionaryService) {
         this.reviewService = reviewService;
+        this.tagDictionaryService = tagDictionaryService;
+    }
+
+    /**
+     * 查询启用中的标签字典，供 content-service 生成标签建议。
+     */
+    @GetMapping("/tag-dictionary")
+    public Result<List<String>> tagDictionary() {
+        // 1. 只读返回，不修改标签关系表
+        return Result.ok(tagDictionaryService.listVisibleNames());
     }
 
     /**

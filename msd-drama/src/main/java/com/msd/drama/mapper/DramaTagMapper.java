@@ -26,6 +26,18 @@ public interface DramaTagMapper extends BaseMapper<DramaTag> {
     List<DramaTag> selectVisibleByDramaId(@Param("dramaId") Long dramaId);
 
     /**
+     * 查询启用中的标签名称，供 content-service 的 Rex 标签候选使用。
+     */
+    @Select("""
+            SELECT DISTINCT name
+            FROM t_drama_tag
+            WHERE status = 1 AND name IS NOT NULL AND name <> ''
+            ORDER BY name
+            LIMIT 100
+            """)
+    List<String> selectVisibleNames();
+
+    /**
      * 按短剧 ID 批量查询可见标签名称，避免 RAG 导出时的 N+1 查询。
      */
     @Select("""

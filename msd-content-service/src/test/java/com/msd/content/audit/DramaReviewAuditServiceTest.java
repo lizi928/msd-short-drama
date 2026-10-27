@@ -4,14 +4,18 @@ import com.msd.common.dto.DramaAiReviewResultRequest;
 import com.msd.common.dto.DramaReviewCandidateDTO;
 import com.msd.common.result.Result;
 import com.msd.content.client.DramaReviewClient;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -25,9 +29,24 @@ class DramaReviewAuditServiceTest {
 
     private final DramaReviewClient reviewClient = mock(DramaReviewClient.class);
     private final StructuredAuditService auditService = mock(StructuredAuditService.class);
+    private final RexAdvisoryService rexAdvisoryService = mock(RexAdvisoryService.class);
 
     private final DramaReviewAuditService service =
-            new DramaReviewAuditService(reviewClient, auditService, JsonMapper.shared());
+            new DramaReviewAuditService(reviewClient, auditService, rexAdvisoryService,
+                    JsonMapper.shared());
+
+    /**
+     * 默认不返回 Rex 建议；单个用例按需覆盖。
+     */
+    @BeforeEach
+    void stubAdvisory() {
+        when(rexAdvisoryService.analyzeAsync(any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(rexAdvisoryService.await(any(), anyLong())).thenAnswer(invocation -> {
+            CompletableFuture<DramaReviewAdvisory> future = invocation.getArgument(0);
+            return future == null ? null : future.join();
+        });
+    }
 
     /**
      * 未违规写回 2，结果 JSON 包含原始结论。
@@ -132,6 +151,136 @@ class DramaReviewAuditServiceTest {
 
         assertThat(service.auditOne(5003L)).isNull();
         verify(auditService, never()).audit(any());
+    }
+
+    /**
+     * Rex 建议写入 ai_review_result，但不改变合规结论。
+     */
+    @Test
+    void writesAdvisoryWithoutChangingStatus() {
+        when(reviewClient.detail(5003L)).thenReturn(Result.ok(candidate(5003L)));
+        when(auditService.audit(any())).thenReturn(new AuditCheckResponse(
+                new AuditVerdict(false, "", List.of()), false, List.of(), 12));
+        when(reviewClient.writeAiResult(eq(5003L), any())).thenReturn(Result.ok(true));
+        when(rexAdvisoryService.analyzeAsync(any(), eq(5003L)))
+                .thenReturn(CompletableFuture.completedFuture(advisory()));
+
+        DramaReviewAuditItem item = service.auditOne(5003L);
+
+        assertThat(item.aiReviewStatus()).isEqualTo(2);
+        ArgumentCaptor<DramaAiReviewResultRequest> captor =
+                ArgumentCaptor.forClass(DramaAiReviewResultRequest.class);
+        verify(reviewClient).writeAiResult(eq(5003L), captor.capture());
+        assertThat(captor.getValue().aiReviewResult())
+                .contains("\"advisory\"")
+                .contains("\"highNegative\":true")
+                .contains("\"name\":\"悬疑\"");
+    }
+
+    /**
+     * Rex 降级只影响建议，不影响合规通过。
+     */
+    @Test
+    void rexDegradedStillPasses() {
+        when(reviewClient.detail(5003L)).thenReturn(Result.ok(candidate(5003L)));
+        when(auditService.audit(any())).thenReturn(new AuditCheckResponse(
+                new AuditVerdict(false, "", List.of()), false, List.of(), 12));
+        when(reviewClient.writeAiResult(eq(5003L), any())).thenReturn(Result.ok(true));
+        when(rexAdvisoryService.analyzeAsync(any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(
+                        DramaReviewAdvisory.degraded("rex_unavailable", 10)));
+
+        DramaReviewAuditItem item = service.auditOne(5003L);
+
+        assertThat(item.aiReviewStatus()).isEqualTo(2);
+        ArgumentCaptor<DramaAiReviewResultRequest> captor =
+                ArgumentCaptor.forClass(DramaAiReviewResultRequest.class);
+        verify(reviewClient).writeAiResult(eq(5003L), captor.capture());
+        assertThat(captor.getValue().aiReviewResult()).contains("rex_unavailable");
+    }
+
+    /**
+     * Rex 启动异常也不能让审核失败。
+     */
+    @Test
+    void rexExceptionDoesNotBreakAudit() {
+        when(reviewClient.detail(5003L)).thenReturn(Result.ok(candidate(5003L)));
+        when(auditService.audit(any())).thenReturn(new AuditCheckResponse(
+                new AuditVerdict(false, "", List.of()), false, List.of(), 12));
+        when(reviewClient.writeAiResult(eq(5003L), any())).thenReturn(Result.ok(true));
+        when(rexAdvisoryService.analyzeAsync(any(), any()))
+                .thenThrow(new RuntimeException("boom"));
+
+        DramaReviewAuditItem item = service.auditOne(5003L);
+
+        assertThat(item.aiReviewStatus()).isEqualTo(2);
+    }
+
+    /**
+     * 建议 JSON 超限时逐级裁剪，审核状态仍由合规结论决定。
+     */
+    @Test
+    void oversizedAdvisoryIsTrimmed() {
+        when(reviewClient.detail(5003L)).thenReturn(Result.ok(candidate(5003L)));
+        when(auditService.audit(any())).thenReturn(new AuditCheckResponse(
+                new AuditVerdict(false, "", List.of()), false, List.of(), 12));
+        when(reviewClient.writeAiResult(eq(5003L), any())).thenReturn(Result.ok(true));
+        when(rexAdvisoryService.analyzeAsync(any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(oversizedAdvisory()));
+
+        DramaReviewAuditItem item = service.auditOne(5003L);
+
+        assertThat(item.aiReviewStatus()).isEqualTo(2);
+        ArgumentCaptor<DramaAiReviewResultRequest> captor =
+                ArgumentCaptor.forClass(DramaAiReviewResultRequest.class);
+        verify(reviewClient).writeAiResult(eq(5003L), captor.capture());
+        assertThat(captor.getValue().aiReviewResult()).hasSizeLessThanOrEqualTo(7800);
+        assertThat(captor.getValue().aiReviewResult()).doesNotContain("标签-");
+    }
+
+    /**
+     * 合规降级仍写 4，Rex 建议不能把它改成通过。
+     */
+    @Test
+    void rexAdvisoryCannotOverrideComplianceDegrade() {
+        when(reviewClient.detail(5003L)).thenReturn(Result.ok(candidate(5003L)));
+        when(auditService.audit(any())).thenReturn(new AuditCheckResponse(
+                null, true, List.of(StructuredAuditService.FLAG_TIMEOUT), 10000));
+        when(reviewClient.writeAiResult(eq(5003L), any())).thenReturn(Result.ok(true));
+        when(rexAdvisoryService.analyzeAsync(any(), any()))
+                .thenReturn(CompletableFuture.completedFuture(advisory()));
+
+        DramaReviewAuditItem item = service.auditOne(5003L);
+
+        assertThat(item.aiReviewStatus()).isEqualTo(4);
+    }
+
+    /**
+     * 构造情感/标签建议。
+     */
+    private DramaReviewAdvisory advisory() {
+        return new DramaReviewAdvisory(
+                "iic/nlp_deberta_rex-uninlu-chinese-base", "v1.0.2",
+                new DramaSentimentAdvisory("negative", "负向情感", true, 2,
+                        List.of("刑警追查十年悬案")),
+                List.of(new DramaTagSuggestion("悬疑", 2, List.of("雨夜连环案"))),
+                2, 0, false, false, List.of(), 842);
+    }
+
+    /**
+     * 构造带大量超长标签的建议，触发 JSON 裁剪。
+     */
+    private DramaReviewAdvisory oversizedAdvisory() {
+        List<DramaTagSuggestion> tags = new ArrayList<>();
+        for (int index = 0; index < 120; index += 1) {
+            tags.add(new DramaTagSuggestion("标签-" + index + "-" + "x".repeat(50),
+                    index, List.of("证据".repeat(80))));
+        }
+        return new DramaReviewAdvisory(
+                "model", "v1.0.2",
+                new DramaSentimentAdvisory("negative", "负向情感", true, 2,
+                        List.of("证据".repeat(80))),
+                tags, 3, 0, false, false, List.of(), 100);
     }
 
     /**
