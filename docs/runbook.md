@@ -123,8 +123,9 @@ scripts\create-topics.cmd
 或手动：
 
 ```bash
-JAVA_HOME=C:/Users/jun/.jdks/ms-21.0.11 \
-  D:/kafka_2.13-4.1.2/bin/windows/kafka-topics.bat \
+JAVA_HOME="/path/to/jdk-21" \
+  KAFKA_HOME="/path/to/kafka_2.13-4.1.2" \
+  "$KAFKA_HOME/bin/windows/kafka-topics.bat" \
   --bootstrap-server 192.168.33.129:9092 --list
 ```
 
@@ -173,7 +174,7 @@ A2A AgentCard 注册需要 Nacos 3.1+，当前 Compose 使用 `v3.1.1`。升级�
 ```bash
 mkdir -p deploy/nacos/backup
 docker run --rm -v msd-infra_nacos_data:/data:ro \
-  -v "D:/AIcoding/DL/deploy/nacos/backup:/backup" alpine \
+  -v "$(pwd)/deploy/nacos/backup:/backup" alpine \
   sh -c 'tar czf /backup/nacos-data-3.0.1-before-3.1.1.tgz -C /data .'
 docker compose -f deploy/docker-compose.yml up -d nacos
 docker inspect -f '{{.State.Health.Status}}' msd-nacos

@@ -129,7 +129,9 @@ TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/user/internal/ping
 ```
 
-生产环境通过 `MSD_JWT_SECRET` 覆盖默认密钥，至少 32 字节。CORS 开发环境允许所有来源，生产需改成具体域名。
+生产环境通过 `MSD_JWT_SECRET` 覆盖默认密钥，至少 32 字节；网关和用户服务在非 `dev`/`test` profile 下会拒绝空密钥或仓库中的公开默认值，直接启动失败。CORS 开发环境允许所有来源，生产需改成具体域名。
+
+网关测试台 `/internal/dev/token` 默认关闭；本地需要时用 `MSD_DEV_TOKEN_ENABLED=true` 启动网关。
 
 > 直连 8101-8108 会绕过网关鉴权，生产只暴露网关端口；8108 只绑定 127.0.0.1。
 
@@ -666,3 +668,8 @@ scripts\init-db.cmd
 - 真实 API Key 只放环境变量或 `deploy/.env`，不提交仓库。
 - 本机 Docker Hub 不可直连，镜像使用 `docker.1panel.live`。
 - Kafka 的 Windows 批处理依赖 `wmic`，请使用 `scripts/start-kafka.cmd`。
+- 网关测试台 `/internal/dev/token` 默认关闭；本地需要时设置 `MSD_DEV_TOKEN_ENABLED=true`。
+
+## License
+
+[MIT](LICENSE) © 2026 lizi928

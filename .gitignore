@@ -52,13 +52,24 @@ rex-uninlu-service/models/
 
 ### Claude local ###
 .claude/settings_local.json
+.claude/skills/
 
 ### Project ###
 .env
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
 deploy/.env
 deploy/seata/libs/*.jar
 deploy/nacos/backup/
 logs/
+log/
+*.log
+*.pem
+*.key
+*.p12
+*.jks
 derby.log
 *.iml
 .idea/
