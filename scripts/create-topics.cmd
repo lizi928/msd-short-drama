@@ -28,7 +28,7 @@ for %%T in (
   call "%KAFKA_HOME%\bin\windows\kafka-topics.bat" --bootstrap-server %BOOTSTRAP% --create --if-not-exists --topic %%T --partitions %PARTITIONS% --replication-factor 1
 )
 
-rem 已存在的 topic 从 3 分区扩到 6；Kafka 不支持缩分区，重复执行无副作用
+rem Expand existing topics from 3 to 6 partitions; Kafka cannot shrink, so reruns are safe.
 for %%T in (
   msd.infra.smoke.v1
   msd.interaction.like.v1

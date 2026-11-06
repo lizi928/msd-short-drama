@@ -1,8 +1,8 @@
 @echo off
 setlocal
 
-rem 本机 Kafka 4.1.2 的 bin\windows\*.bat 依赖已被 Windows 11 移除的 wmic，
-rem 因此直接用 java -cp libs\* 启动 kafka.Kafka，绕过批处理脚本。
+rem Local Kafka 4.1.2 bin\windows\*.bat depends on wmic, removed in Windows 11.
+rem Start kafka.Kafka directly with java -cp libs\* to avoid the broken wrapper.
 
 if "%JAVA_HOME%"=="" (
   echo [ERROR] JAVA_HOME is required
