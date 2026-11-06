@@ -116,7 +116,9 @@ firewall-cmd --add-port=9092/tcp --permanent && firewall-cmd --reload
 
 ### 3.3 创建 Topic（宿主机执行）
 
-```bash
+```bat
+set JAVA_HOME=C:\path\to\jdk-21
+set KAFKA_HOME=C:\path\to\kafka_2.13-4.1.2
 scripts\create-topics.cmd
 ```
 
@@ -140,7 +142,7 @@ Topic 列表（6 分区、1 副本；`scripts/create-topics.cmd` 会把已有 3 
 - `msd.ai.review.request.v1`
 - `msd.interaction.dlq.v1`
 
-> `scripts/start-kafka.cmd` 只用于本机 Kafka fallback（`D:\kafka_2.13-4.1.2`），默认不用。
+> `scripts/start-kafka.cmd` 只用于本机 Kafka fallback，运行前需要设置 `JAVA_HOME` 和 `KAFKA_HOME`，默认不用。
 
 ## 4. Docker 容器
 
