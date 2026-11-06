@@ -1,9 +1,12 @@
 package com.msd.gateway.auth;
 
+import com.msd.common.auth.JwtSecretGuard;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
@@ -26,13 +29,17 @@ public class JwtTokenParser {
      * 初始化 HS256 密钥和签发方。
      */
     public JwtTokenParser(@Value("${msd.auth.jwt.secret}") String secret,
-                          @Value("${msd.auth.jwt.issuer:msd}") String issuer) {
-        // 把字符串密钥按 UTF-8 转成字节数组
+                          @Value("${msd.auth.jwt.issuer:msd}") String issuer,
+                          Environment environment) {
+        // 1. 非 dev/test 环境禁止使用公开默认密钥
+        JwtSecretGuard.validate(secret,
+                environment.acceptsProfiles(Profiles.of("dev", "test")));
+        // 2. 把字符串密钥按 UTF-8 转成字节数组
         byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
         if (bytes.length < 32) {
             throw new IllegalArgumentException("JWT secret must be at least 32 bytes");
         }
-        // 把原始字节包装成密钥，并声明算法为 HmacSHA256
+        // 3. 把原始字节包装成密钥，并声明算法为 HmacSHA256
         this.key = new SecretKeySpec(bytes, "HmacSHA256");
         this.issuer = issuer;
     }

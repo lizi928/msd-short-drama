@@ -1,7 +1,10 @@
 package com.msd.user.auth;
 
+import com.msd.common.auth.JwtSecretGuard;
 import io.jsonwebtoken.Jwts;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
@@ -32,13 +35,17 @@ public class JwtTokenIssuer {
      */
     public JwtTokenIssuer(@Value("${msd.auth.jwt.secret}") String secret,
                           @Value("${msd.auth.jwt.issuer:msd}") String issuer,
-                          @Value("${msd.auth.jwt.ttl-seconds:86400}") long ttlSeconds) {
-        // 1. 密钥按 UTF-8 转字节，不足 32 字节直接启动失败
+                          @Value("${msd.auth.jwt.ttl-seconds:86400}") long ttlSeconds,
+                          Environment environment) {
+        // 1. 非 dev/test 环境禁止使用公开默认密钥
+        JwtSecretGuard.validate(secret,
+                environment.acceptsProfiles(Profiles.of("dev", "test")));
+        // 2. 密钥按 UTF-8 转字节，不足 32 字节直接启动失败
         byte[] bytes = secret.getBytes(StandardCharsets.UTF_8);
         if (bytes.length < 32) {
             throw new IllegalArgumentException("JWT secret must be at least 32 bytes");
         }
-        // 2. 包装成 HmacSHA256 密钥，并限制最短有效期
+        // 3. 包装成 HmacSHA256 密钥，并限制最短有效期
         this.key = new SecretKeySpec(bytes, "HmacSHA256");
         this.issuer = issuer;
         this.ttlSeconds = Math.max(60L, ttlSeconds);

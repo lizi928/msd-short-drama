@@ -62,7 +62,7 @@ docker build -f deploy/docker/Dockerfile.service \
 
 ## 3. 上线前最低检查
 
-1. 更换所有默认密码、JWT 密钥和 Nacos token，设置 `MSD_INTERNAL_TOKEN`，`deploy/.env` 不进入镜像。
+1. 更换所有默认密码、JWT 密钥和 Nacos token，设置 `MSD_INTERNAL_TOKEN`，`deploy/.env` 不进入镜像；非 `dev`/`test` profile 下 JWT 密钥为空或仍为仓库默认值会启动失败。
 2. 网关只暴露 8000；`/internal-source/**`、`/internal/**` 只允许内网。
 3. 为 MySQL、Redis、Kafka、Nacos、Milvus、ES 配置认证和备份。
 4. 配置 HTTPS、CORS 白名单和网关限流。
