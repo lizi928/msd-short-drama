@@ -123,9 +123,9 @@ scripts\create-topics.cmd
 或手动：
 
 ```bash
-JAVA_HOME="/path/to/jdk-21" \
-  KAFKA_HOME="/path/to/kafka_2.13-4.1.2" \
-  "$KAFKA_HOME/bin/windows/kafka-topics.bat" \
+export JAVA_HOME="/path/to/jdk-21"
+export KAFKA_HOME="/path/to/kafka_2.13-4.1.2"
+"$KAFKA_HOME/bin/windows/kafka-topics.bat" \
   --bootstrap-server 192.168.33.129:9092 --list
 ```
 
