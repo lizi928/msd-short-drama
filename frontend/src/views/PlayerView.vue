@@ -155,12 +155,35 @@ onMounted(load)
     animation: watch-spin 800ms linear infinite;
 }
 
-/* 桌面端取消 480 移动壳，Feed 自己负责三栏布局 */
+/* 桌面端取消 480 移动壳，为常驻侧栏让出空间 */
 @media (min-width: 1024px) {
     .watch-page {
-        left: 0;
-        width: 100%;
+        left: var(--sidebar-width);
+        width: calc(100% - var(--sidebar-width));
+        background: var(--bg);
         transform: none;
+    }
+
+    .watch-bar {
+        padding: 18px 24px;
+        background: transparent;
+        color: var(--text);
+    }
+
+    .watch-back {
+        border-color: var(--line-strong);
+        background: var(--surface);
+        color: var(--text-soft);
+        box-shadow: var(--shadow-soft);
+    }
+
+    .watch-state {
+        color: var(--muted);
+    }
+
+    .watch-spinner {
+        border-color: var(--line-strong);
+        border-top-color: var(--brand);
     }
 }
 

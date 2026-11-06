@@ -135,6 +135,7 @@ Topic 列表（6 分区、1 副本；`scripts/create-topics.cmd` 会把已有 3 
 - `msd.interaction.comment.v1`
 - `msd.interaction.history.v1`
 - `msd.drama.changed.v1`
+- `msd.transcript.changed.v1`
 - `msd.ai.review.request.v1`
 - `msd.interaction.dlq.v1`
 
@@ -429,7 +430,7 @@ java -Djdk.tracePinnedThreads=full -jar msd-drama/target/msd-drama-1.0.0-SNAPSHO
 
 ### RAG 内容推荐
 
-`msd-content-service`（8107）依赖 Milvus、Elasticsearch、DeepSeek 和 DashScope。启动顺序：
+`msd-content-service`（8107）依赖 Milvus、Elasticsearch、DeepSeek、DashScope、Redis 和 Kafka；Redis/Kafka 不可用时画像、幂等和增量索引会降级或暂停，但检索主链路仍可用。启动顺序：
 
 ```bash
 # 1. 基础设施：Milvus + ES（etcd/minio 是 Milvus 依赖）
@@ -467,6 +468,118 @@ curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
 
 响应包含 `answer`、`rewrittenQuery`、`sources`、`degraded`、`degradedFlags`、`elapsedMs`。
 
+流式和相似推荐：
+
+```bash
+# SSE 找剧；-N 关闭 curl 缓冲
+curl -N -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend/stream \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"有没有那种先婚后爱的甜宠剧","topK":3}'
+
+# 相似短剧
+curl 'http://127.0.0.1:8000/api/content/internal/ai/rag/related?dramaId=5005&limit=6' \
+  -H "Authorization: Bearer $TOKEN"
+
+# 冷启动偏好和个性化缓存清理
+curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/preferences \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"categoryIds":[2002]}'
+curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/personalized/evict \
+  -H "Authorization: Bearer $TOKEN"
+
+# 推荐负反馈/完播归因
+curl -X POST http://127.0.0.1:8000/api/interaction/internal/recommendations/events \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"requestId":"req-1","dramaId":5005,"eventType":4,"position":1}'
+
+# 评论课代表
+curl 'http://127.0.0.1:8000/api/interaction/internal/ai/comments/summary?dramaId=5001' \
+  -H "Authorization: Bearer $TOKEN"
+
+# 创作者 AI 预检（CREATOR/ADMIN）
+CREATOR_TOKEN=$(python scripts/gen-jwt.py --user-id 1002 --role CREATOR)
+curl -X POST http://127.0.0.1:8000/api/content/internal/ai/audit/precheck \
+  -H "Authorization: Bearer $CREATOR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"长安第一女仵作","subtitle":"验尸破案","description":"长安城接连出现离奇命案。","episodeTitles":["第1集 雨夜尸案"]}'
+```
+
+P1-7 增量索引：
+
+- 审核通过/下架后 drama 向 `msd.drama.changed.v1` 发送事件；content 消费后只更新单部短剧。
+- 首次启动前确认 topic 存在：`scripts\create-topics.cmd`。
+- content 消费组 `msd-content-rag-index-v1` 从 `earliest` 开始，首次启动会回放历史事件。
+- 首次部署需要先执行一次全量 reindex，确保 ES index 和 mapping 已存在；增量消费不会自动创建索引。
+- 关闭增量索引：Nacos `msd.ai.rag.incremental.enabled=false`；改完需重启 content。
+- 索引失败重试 3 次后只记录 `rag_index_failure_total`，执行 `POST /internal/ai/rag/reindex` 全量恢复。
+- 字幕导入/ASR 使用 `msd.transcript.changed.v1` 和独立消费组 `msd-content-transcript-index-v1`；全量 reindex 会一并补建字幕索引。
+
+P1-4/P1-5 首次部署需要执行：
+
+```bash
+mysql -umsd -p -h127.0.0.1 --default-character-set=utf8mb4 \
+  < deploy/mysql/repair/20261106_p1_comment_recommendation.sql
+```
+
+- 新增 `t_recommendation_exposure`、`t_recommendation_event`，以及 `t_comment.ai_review_*` 三列。
+- 评论 AI 预审异步执行，管理端可在评论治理页按 AI 风险/失败筛选并重跑。
+
+P2-1 字幕/ASR 首次部署需要执行：
+
+```bash
+mysql -umsd -p -h127.0.0.1 --default-character-set=utf8mb4 \
+  < deploy/mysql/repair/20261106_p2_transcript.sql
+```
+
+- 新增 `t_episode_subtitle`、`t_episode_transcript_segment`。
+- topic `msd.transcript.changed.v1` 需要创建；`scripts\create-topics.cmd` 已包含。
+- content 全量 reindex 会自动补建字幕索引；首次上线仍建议先全量 reindex 一次。
+
+P2-3/P2-4 首次部署：
+
+- 无数据库迁移；`t_ai_feedback` 复用，新增 `CREATOR_COPY` 场景和 `ADOPT` 原因。
+- 发布 `content-config.yaml` 的 `msd.ai.governance.*`、`msd.ai.copilot.*`、`msd.ai.rag.rerank.min-score`；确认网关包含 `/api/content/internal/ai/copilot/generate`。
+- 全量 reindex 后跑一次离线评测；要验证时间戳引用，先给 golden set 中的 6001/6002 导入字幕或回传 ASR：
+
+```bash
+python scripts/eval-rag.py --output eval/report.json
+```
+
+- 评测默认直连 8107；经网关时加 `--base-url http://127.0.0.1:8000/api/content --token "$TOKEN"`。
+- 灰度：Nacos 把 `msd.ai.governance.features.rag-search.gray-percent` 从 100 调到 5，再逐步升到 50/100；关闭实验保持 `msd.ai.governance.experiments.rag-model.enabled=false`。
+- 成本保护：`msd.ai.governance.budget.enabled=true`，`daily-tokens-per-user` 按实际预算调整；Redis 故障时预算 fail-open。
+- 语义缓存默认关闭；开启前确认 embedding 延迟可接受，`semantic-threshold` 建议不低于 0.95。
+- 创作者 Copilot 每日限额 `msd.ai.copilot.daily-limit`，默认 20；前端入口在编辑页“AI 创作助手”。
+
+字幕/ASR 手工验证：
+
+```bash
+# 1. 创作者导入 SRT（需要 CREATOR Token 和已保存的 episodeId）
+CREATOR_TOKEN=$(python scripts/gen-jwt.py --user-id 1002 --role CREATOR)
+curl -X POST http://127.0.0.1:8000/api/drama/internal/creator/dramas/5001/episodes/6001/subtitles \
+  -H "Authorization: Bearer $CREATOR_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"language":"zh","format":"SRT","content":"1\n00:00:01,000 --> 00:00:03,000\n你好\n"}'
+
+# 2. 离线 ASR（需要 ffmpeg + faster-whisper）
+pip install -r scripts/requirements-asr.txt
+python scripts/transcribe-episode.py --video D:/media/6001.mp4 --episode-id 6001
+
+# 3. 带播放位置问剧情，sources 应出现 type=transcript
+curl -X POST http://127.0.0.1:8000/api/content/internal/ai/companion/chat \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"开头发生了什么？","sessionId":"p2-demo","episodeId":6001,"positionMs":60000}'
+```
+
+全局找剧助手：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/agent/internal/ai/agent/chat \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"有没有先婚后爱的甜宠剧","sessionId":"assistant-demo"}'
+```
+
+- 响应 `cards` 是从 `[DRAMA_CARD]` 解析出的可点击短剧；没有卡片时前端只展示文本。
+- 首次部署需重新发布 `agent-config.yaml`，确认 `msd.ai.agent.tools.allow` 包含 `search_drama_rag`。
+
 降级演练：
 
 | 操作 | 预期 |
@@ -480,7 +593,7 @@ curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
 
 注意：
 
-- `reindex` / `status` 只允许直连 8107，网关只暴露 recommend。
+- `reindex` / `status` 只允许直连 8107；网关只暴露 recommend、recommend/stream、related、personalized、companion chat/stream/recap、审核、创作者预检和 Copilot 接口。
 - 网关对 `msd-content-service` 路由限流 5 QPS/IP。
 - Milvus 未启动时服务仍可启动（延迟连接），recommend 自动走 BM25。
 - ES 启动报 `max virtual memory areas vm.max_map_count [65530] is too low`，在 Docker Desktop VM 执行：
@@ -499,7 +612,7 @@ curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
 - 伴看依赖 Redis、Milvus、ES、drama 和 content-service。Redis 不可用时聊天 fail-open，响应标记 `memory_summary`，不返回 500。
 - Milvus 停止时前情检索标记 `vector`，仅用 BM25；ES 停止时标记 `bm25`，仅用向量；两路都停止返回空前情并同时标记 `vector`、`bm25`，Agent 不得编造前情。
 - 分集索引未重建（ES 中该剧分集数为 0）时标记 `episode_index`，需要执行全量 reindex。
-- 伴看工具接口和审核接口只允许直连 8107，网关仅暴露 `/api/content/internal/ai/companion/chat`。
+- 伴看工具接口和审核接口只允许直连 8107；网关暴露 `/api/content/internal/ai/companion/chat`、`/chat/stream` 和 `/recap`。
 - RexUniNLU 情感/标签建议默认启用；sidecar 未启动时审核仍正常，advisory 标记 `rex_unavailable`：
 
 ```bash
@@ -576,9 +689,9 @@ seq 1 30 | xargs -P 30 -I{} curl -s -o /dev/null -w "%{http_code}\n" \
 `msd-agent-service` 的 `aiChat` 资源用 Sentinel 监控 Mock RAG + LLM 调用，规则在 Nacos `SENTINEL_GROUP/sentinel-agent-degrade.json`。
 
 ```bash
-TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+TOKEN=$(python scripts/gen-jwt.py --user-id 1001 --role ADMIN)
 
-# 正常调用
+# 正常调用；Mock 经网关只允许 ADMIN
 curl -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8000/api/agent/internal/ai/chat?prompt=hi"
 
@@ -688,7 +801,7 @@ curl -s http://127.0.0.1:9411/health
 完整 AI 链路（Gateway → interaction → agent）：
 
 ```bash
-TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+TOKEN=$(python scripts/gen-jwt.py --user-id 1001 --role ADMIN)
 curl -s -w "\ntime=%{time_total}s\n" \
   -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8000/api/interaction/internal/ai/chat?prompt=hi"
@@ -932,6 +1045,14 @@ docker compose -f deploy/docker-compose.yml down
 | Milvus insert 后 panic `MmapManager has not been init` 或 `Failed to get filesystem` | 检查 `deploy/docker-compose.yml` 的 `COMMON_STORAGETYPE` 是否为 `remote`；2.6.x 的 `minio` 已废弃，会触发 Arrow FS 初始化失败。改为 `remote` 后重启 Milvus，重跑 reindex；`milvus_data` 可保留 |
 | `InitRemoteArrowFileSystemSingleton failed ... Unsupported storage type: minio` | 同上；2.6.x 的 `common.storageType` 只接受 `remote/local/opendal`，不要再使用 `minio` |
 | 连续 reindex 后 ES 数量翻倍 | 正常实现会先删再写；若仍翻倍，检查是否有其他进程直接写入索引 |
+| 审核通过/下架后索引没变化 | 确认 `msd.kafka.drama-changed.enabled=true`、Kafka 可达、topic `msd.drama.changed.v1` 存在；查 drama 的 `drama changed published` 和 content 的 `drama changed event accepted` 日志 |
+| 增量索引 `rag_index_failure_total` 持续增长 | 查 content 日志中的 Milvus/ES 错误；修复后执行全量 reindex，或重放失败事件 |
+| AI 预检返回 429 | 用户当天额度用完（默认 10 次）；改 `content-config.yaml` 的 `msd.ai.precheck.daily-limit`，或等次日 |
+| AI 预检 `degraded=true` | 合规模型超时/不可用；页面提示以人工审核为准，不影响提交和人工审核 |
+| 字幕导入后 `sources` 没有 transcript | 确认 `t_episode_subtitle/segment` 有数据、`msd.transcript.changed.v1` 有事件、content 日志有 `transcript index upsert`；必要时全量 reindex |
+| ASR 脚本报 `No module named faster_whisper` | 执行 `pip install -r scripts/requirements-asr.txt`，并确认系统 ffmpeg 在 PATH |
+| 全局助手不调用找剧工具 | 确认 `agent-config.yaml` 的 allow 包含 `search_drama_rag`，并重新发布 Nacos 配置后重启 8105 |
+| 全局助手返回空 cards | 工具可能返回 `[NO_RESULT]`/`[DEGRADED]`，或 Supervisor 没保留 `[DRAMA_CARD]` 行；查工具调用审计日志 |
 | 首页/详情一直查库 | 确认 `msd.cache.enabled=true`、Redis 可达；应用日志有 `redis unavailable` 时先恢复 Redis；见 [cache.md](cache.md) |
 | Redis 故障时请求快速降级 | `RedissonClientAccessor` 在 `redisson-init` 守护线程建连，请求线程不阻塞；看该线程日志和 15s 重试间隔，恢复后自动重连 |
 | 详情随机 ID 仍在 Redis 生成 null key | 布隆可能未启用或 active 指针缺失；检查 `msd:drama:bloom:active` 和启动日志中的布隆重建 |

@@ -26,9 +26,10 @@ class EpisodeSummaryServiceTest {
     private final CompanionLightModel lightModel = mock(CompanionLightModel.class);
     private final EpisodeIndexService indexService = mock(EpisodeIndexService.class);
     private final CompanionProperties properties = new CompanionProperties();
+    private final CompanionAccessService accessService = mock(CompanionAccessService.class);
 
     private final EpisodeSummaryService service = new EpisodeSummaryService(
-            dramaClient, lightModel, indexService, properties);
+            dramaClient, lightModel, indexService, properties, accessService);
 
     /**
      * 已有摘要直接返回，不认领也不调用模型。
@@ -47,6 +48,25 @@ class EpisodeSummaryServiceTest {
     }
 
     /**
+     * 付费集未解锁时摘要工具返回 locked，不生成也不回写。
+     */
+    @Test
+    void returnsLockedSummaryForPaidEpisodeWithoutAccess() {
+        CompanionEpisodeDTO meta = meta("已有摘要");
+        when(dramaClient.companion(6401L)).thenReturn(Result.ok(meta));
+        when(accessService.canAccess(1003L, meta)).thenReturn(false);
+
+        EpisodeSummaryView view = service.getSummaryForUser(6401L, 1003L);
+
+        assertThat(view.summary()).isEmpty();
+        assertThat(view.source()).isEqualTo(EpisodeSummaryService.SOURCE_LOCKED);
+        assertThat(view.degraded()).isTrue();
+        assertThat(view.degradedFlags()).containsExactly("locked");
+        verify(dramaClient, never()).claimSummary(6401L);
+        verify(lightModel, never()).complete(any(), any());
+    }
+
+    /**
      * 认领成功后生成摘要、回写并更新单集索引。
      */
     @Test
@@ -59,7 +79,7 @@ class EpisodeSummaryServiceTest {
         when(lightModel.getModelName()).thenReturn("qwen-turbo");
         when(dramaClient.writebackSummary(eq(6401L), any())).thenReturn(Result.ok(true));
         when(indexService.upsert(6401L, 5005L, "长安第一女仵作", 1,
-                "第1集 雨夜尸案", "生成的摘要")).thenReturn(true);
+                "第1集 雨夜尸案", "生成的摘要", 0)).thenReturn(true);
 
         EpisodeSummaryView view = service.getSummary(6401L);
 
@@ -67,7 +87,7 @@ class EpisodeSummaryServiceTest {
         assertThat(view.source()).isEqualTo(EpisodeSummaryService.SOURCE_GENERATED);
         assertThat(view.degraded()).isFalse();
         verify(indexService).upsert(6401L, 5005L, "长安第一女仵作", 1,
-                "第1集 雨夜尸案", "生成的摘要");
+                "第1集 雨夜尸案", "生成的摘要", 0);
     }
 
     /**
@@ -177,7 +197,7 @@ class EpisodeSummaryServiceTest {
         when(lightModel.complete(any(), any())).thenReturn("生成的摘要");
         when(lightModel.getModelName()).thenReturn("qwen-turbo");
         when(dramaClient.writebackSummary(eq(6401L), any())).thenReturn(Result.ok(true));
-        when(indexService.upsert(any(), any(), any(), any(), any(), any())).thenReturn(false);
+        when(indexService.upsert(any(), any(), any(), any(), any(), any(), any())).thenReturn(false);
 
         EpisodeSummaryView view = service.getSummary(6401L);
 
@@ -200,7 +220,7 @@ class EpisodeSummaryServiceTest {
                 .thenReturn("第一句完整。第二句也很完整。第三句超出上限。");
         when(lightModel.getModelName()).thenReturn("qwen-flash");
         when(dramaClient.writebackSummary(eq(6401L), any())).thenReturn(Result.ok(true));
-        when(indexService.upsert(any(), any(), any(), any(), any(), any())).thenReturn(true);
+        when(indexService.upsert(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
 
         EpisodeSummaryView view = service.getSummary(6401L);
 

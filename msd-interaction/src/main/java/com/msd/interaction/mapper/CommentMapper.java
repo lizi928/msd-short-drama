@@ -145,22 +145,46 @@ public interface CommentMapper extends BaseMapper<Comment> {
     long countMyComments(@Param("userId") Long userId);
 
     /**
-     * 管理员分页查询评论，可按状态和短剧过滤。
+     * 查询评论课代表候选：可见根评论，按点赞数倒序。
      */
     @Select("""
             <script>
             SELECT id, drama_id, episode_id, user_id, root_id, parent_id, reply_to_user_id,
                    content, like_count, reply_count, status, create_time, update_time
             FROM t_comment
+            WHERE drama_id = #{dramaId} AND status = 1 AND root_id = 0
+            <choose>
+                <when test="episodeId != null">AND episode_id = #{episodeId}</when>
+                <otherwise>AND episode_id IS NULL</otherwise>
+            </choose>
+            ORDER BY like_count DESC, create_time DESC, id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    List<Comment> selectTopComments(@Param("dramaId") Long dramaId,
+                                    @Param("episodeId") Long episodeId,
+                                    @Param("limit") int limit);
+
+    /**
+     * 管理员分页查询评论，可按状态和短剧过滤。
+     */
+    @Select("""
+            <script>
+            SELECT id, drama_id, episode_id, user_id, root_id, parent_id, reply_to_user_id,
+                   content, like_count, reply_count, status,
+                   ai_review_status, ai_review_result, ai_review_time, create_time, update_time
+            FROM t_comment
             WHERE 1 = 1
             <if test="status != null">AND status = #{status}</if>
             <if test="dramaId != null">AND drama_id = #{dramaId}</if>
+            <if test="aiReviewStatus != null">AND ai_review_status = #{aiReviewStatus}</if>
             ORDER BY create_time DESC, id DESC
             LIMIT #{offset}, #{pageSize}
             </script>
             """)
     List<Comment> selectAdminPage(@Param("status") Integer status,
                                   @Param("dramaId") Long dramaId,
+                                  @Param("aiReviewStatus") Integer aiReviewStatus,
                                   @Param("offset") long offset,
                                   @Param("pageSize") int pageSize);
 
@@ -174,10 +198,35 @@ public interface CommentMapper extends BaseMapper<Comment> {
             WHERE 1 = 1
             <if test="status != null">AND status = #{status}</if>
             <if test="dramaId != null">AND drama_id = #{dramaId}</if>
+            <if test="aiReviewStatus != null">AND ai_review_status = #{aiReviewStatus}</if>
             </script>
             """)
     long countAdminPage(@Param("status") Integer status,
-                        @Param("dramaId") Long dramaId);
+                        @Param("dramaId") Long dramaId,
+                        @Param("aiReviewStatus") Integer aiReviewStatus);
+
+    /**
+     * 标记 AI 审核中；只改 AI 列。
+     */
+    @Update("""
+            UPDATE t_comment
+            SET ai_review_status = 1
+            WHERE id = #{commentId} AND status <> 3
+            """)
+    int markAiReviewing(@Param("commentId") Long commentId);
+
+    /**
+     * 写回 AI 预审结果；只改 AI 列，绝不改人工 status。
+     */
+    @Update("""
+            UPDATE t_comment
+            SET ai_review_status = #{status}, ai_review_result = #{result},
+                ai_review_time = NOW(3)
+            WHERE id = #{commentId} AND status <> 3
+            """)
+    int updateAiReview(@Param("commentId") Long commentId,
+                       @Param("status") Integer status,
+                       @Param("result") String result);
 
     /**
      * 查询根评论下未删除的回复，用于隐藏/删除级联。

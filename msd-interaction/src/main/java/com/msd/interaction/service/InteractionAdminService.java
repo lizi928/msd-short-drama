@@ -30,17 +30,18 @@ public class InteractionAdminService {
      */
     public PageResult<AdminCommentItem> listComments(Integer status,
                                                      Long dramaId,
+                                                     Integer aiReviewStatus,
                                                      Integer pageNo,
                                                      Integer pageSize) {
         // 1. 归一化分页参数
         PageQuery page = PageQuery.of(pageNo, pageSize);
-        long total = commentMapper.countAdminPage(status, dramaId);
+        long total = commentMapper.countAdminPage(status, dramaId, aiReviewStatus);
         if (total <= 0) {
             return PageResult.empty(page.pageNo(), page.pageSize());
         }
         // 2. 查询当前页并转换为管理端视图
         List<AdminCommentItem> records = commentMapper.selectAdminPage(
-                        status, dramaId, page.offset(), page.pageSize())
+                        status, dramaId, aiReviewStatus, page.offset(), page.pageSize())
                 .stream()
                 .map(this::toItem)
                 .toList();
@@ -62,6 +63,9 @@ public class InteractionAdminService {
                 comment.getLikeCount(),
                 comment.getReplyCount(),
                 comment.getStatus(),
+                comment.getAiReviewStatus(),
+                comment.getAiReviewResult(),
+                comment.getAiReviewTime(),
                 comment.getCreateTime());
     }
 }

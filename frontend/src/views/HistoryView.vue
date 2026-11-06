@@ -249,7 +249,7 @@ async function confirmAction() {
     padding: 10px;
     border: 1px solid var(--line);
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--surface);
 }
 
 .history-main {
@@ -322,7 +322,7 @@ async function confirmAction() {
 }
 
 .finished {
-    background: rgba(71, 209, 140, 0.14);
+    background: var(--ok-soft);
     color: var(--ok);
 }
 
@@ -333,7 +333,7 @@ async function confirmAction() {
 
 .episode {
     overflow: hidden;
-    color: #c2cbdb;
+    color: var(--text-soft);
     font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -344,18 +344,18 @@ async function confirmAction() {
     overflow: hidden;
     height: 3px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-strong);
 }
 
 .progress i {
     display: block;
     height: 100%;
     border-radius: inherit;
-    background: linear-gradient(90deg, var(--brand), var(--brand-2));
+    background: linear-gradient(90deg, var(--brand), var(--brand-2-bright));
 }
 
 .meta {
-    color: rgba(255, 255, 255, 0.34);
+    color: var(--muted-soft);
     font-size: 10px;
 }
 

@@ -4,6 +4,7 @@ import com.msd.common.auth.RoleGuard;
 import com.msd.common.dto.DramaAiReviewResultRequest;
 import com.msd.common.dto.DramaReviewCandidateDTO;
 import com.msd.common.dto.PageQuery;
+import com.msd.common.event.DramaChangedAction;
 import com.msd.common.exception.BizException;
 import com.msd.common.result.PageResult;
 import com.msd.common.result.ResultCode;
@@ -16,6 +17,9 @@ import com.msd.drama.entity.Drama;
 import com.msd.drama.entity.DramaReviewLog;
 import com.msd.drama.mapper.DramaMapper;
 import com.msd.drama.mapper.DramaReviewLogMapper;
+import com.msd.drama.mq.DramaChangedPublisher;
+import com.msd.drama.mq.TranscriptDramaNotifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,28 +50,69 @@ public class DramaReviewService {
     private final CacheEvictor cacheEvictor;
     // 布隆过滤器
     private final DramaBloomFilterService bloomFilterService;
+    // RAG 增量索引事件发布器，测试可传 null
+    private final DramaChangedPublisher changedPublisher;
+    // 审核通过后字幕索引补发器，测试可传 null
+    private final TranscriptDramaNotifier transcriptNotifier;
 
     /**
-     * 注入 Mapper、审核日志、缓存失效器和布隆过滤器。
+     * 注入 Mapper、审核日志、缓存失效器、布隆过滤器、索引事件发布器和字幕补发器。
+     */
+    @Autowired
+    public DramaReviewService(DramaMapper dramaMapper,
+                              DramaReviewLogMapper reviewLogMapper,
+                              CacheEvictor cacheEvictor,
+                              DramaBloomFilterService bloomFilterService,
+                              DramaChangedPublisher changedPublisher,
+                              TranscriptDramaNotifier transcriptNotifier) {
+        this.dramaMapper = dramaMapper;
+        this.reviewLogMapper = reviewLogMapper;
+        this.cacheEvictor = cacheEvictor;
+        this.bloomFilterService = bloomFilterService;
+        this.changedPublisher = changedPublisher;
+        this.transcriptNotifier = transcriptNotifier;
+    }
+
+    /**
+     * 兼容旧测试的构造器，不发布索引事件。
      */
     public DramaReviewService(DramaMapper dramaMapper,
                               DramaReviewLogMapper reviewLogMapper,
                               CacheEvictor cacheEvictor,
                               DramaBloomFilterService bloomFilterService) {
-        this.dramaMapper = dramaMapper;
-        this.reviewLogMapper = reviewLogMapper;
-        this.cacheEvictor = cacheEvictor;
-        this.bloomFilterService = bloomFilterService;
+        this(dramaMapper, reviewLogMapper, cacheEvictor, bloomFilterService, null, null);
+    }
+
+    /**
+     * 兼容旧测试的构造器，不补发字幕事件。
+     */
+    public DramaReviewService(DramaMapper dramaMapper,
+                              DramaReviewLogMapper reviewLogMapper,
+                              CacheEvictor cacheEvictor,
+                              DramaBloomFilterService bloomFilterService,
+                              DramaChangedPublisher changedPublisher) {
+        this(dramaMapper, reviewLogMapper, cacheEvictor, bloomFilterService,
+                changedPublisher, null);
+    }
+
+    /**
+     * 查询待 AI 审核的短剧，默认不包含失败项。
+     */
+    public List<DramaReviewCandidateDTO> listAiReviewCandidates(Integer limit) {
+        return listAiReviewCandidates(limit, false);
     }
 
     /**
      * 查询待 AI 审核的短剧，供 content-service 批量审核。
+     *
+     * @param includeFailed true 时同时返回 AI 失败项，用于人工触发重试
      */
-    public List<DramaReviewCandidateDTO> listAiReviewCandidates(Integer limit) {
+    public List<DramaReviewCandidateDTO> listAiReviewCandidates(Integer limit,
+                                                               boolean includeFailed) {
         // 1. 收敛批量大小，默认 20
         int size = limit == null ? MAX_AI_CANDIDATES
                 : Math.max(1, Math.min(limit, MAX_AI_CANDIDATES));
-        return dramaMapper.selectAiReviewCandidates(size).stream()
+        return dramaMapper.selectAiReviewCandidates(size, includeFailed).stream()
                 .map(this::toDto)
                 .toList();
     }
@@ -205,6 +250,12 @@ public class DramaReviewService {
         cacheEvictor.evictHomeDebounced();
         if ("APPROVE".equals(decision)) {
             bloomFilterService.add(dramaId);
+            // 6. 上架或重新上架后，提交后增量更新 RAG 索引
+            publishChanged(dramaId, DramaChangedAction.UPSERT);
+            // 7. 草稿期导入的字幕在审核通过后补建 transcript 索引
+            if (transcriptNotifier != null) {
+                transcriptNotifier.publishForDrama(dramaId);
+            }
         }
         return loadState(dramaId);
     }
@@ -224,6 +275,8 @@ public class DramaReviewService {
         // 3. 下架后公开详情和首页不再可见
         cacheEvictor.evictDetailAfterCommit(dramaId);
         cacheEvictor.evictHomeDebounced();
+        // 4. 提交后从 RAG 索引移除，避免下架内容继续被检索
+        publishChanged(dramaId, DramaChangedAction.DELETE);
         return loadState(dramaId);
     }
 
@@ -236,6 +289,15 @@ public class DramaReviewService {
             throw new BizException(ResultCode.PARAM_ERROR, "短剧 ID 不合法");
         }
         return reviewLogMapper.selectByDrama(dramaId, 50);
+    }
+
+    /**
+     * 发布索引变更事件；发布器为空或发送失败都不影响审核结果。
+     */
+    private void publishChanged(Long dramaId, DramaChangedAction action) {
+        if (changedPublisher != null) {
+            changedPublisher.publishAfterCommit(dramaId, action);
+        }
     }
 
     /**

@@ -3,6 +3,7 @@ package com.msd.drama.service;
 import com.msd.common.auth.RoleGuard;
 import com.msd.common.dto.DramaReviewCandidateDTO;
 import com.msd.common.dto.PageQuery;
+import com.msd.common.event.DramaChangedAction;
 import com.msd.common.exception.BizException;
 import com.msd.common.result.PageResult;
 import com.msd.common.result.ResultCode;
@@ -16,6 +17,8 @@ import com.msd.drama.entity.Drama;
 import com.msd.drama.entity.DramaEpisode;
 import com.msd.drama.mapper.DramaMapper;
 import com.msd.drama.mapper.EpisodeMapper;
+import com.msd.drama.mq.TranscriptChangedPublisher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,18 +45,33 @@ public class DramaWriteService {
     private final DramaReviewService reviewService;
     // 缓存失效器
     private final CacheEvictor cacheEvictor;
+    // 分集字幕索引事件发布器，测试可传 null
+    private final TranscriptChangedPublisher transcriptPublisher;
 
     /**
-     * 注入 Mapper、审核服务和缓存失效器。
+     * 注入 Mapper、审核服务、缓存失效器和字幕事件发布器。
+     */
+    @Autowired
+    public DramaWriteService(DramaMapper dramaMapper,
+                             EpisodeMapper episodeMapper,
+                             DramaReviewService reviewService,
+                             CacheEvictor cacheEvictor,
+                             TranscriptChangedPublisher transcriptPublisher) {
+        this.dramaMapper = dramaMapper;
+        this.episodeMapper = episodeMapper;
+        this.reviewService = reviewService;
+        this.cacheEvictor = cacheEvictor;
+        this.transcriptPublisher = transcriptPublisher;
+    }
+
+    /**
+     * 兼容旧测试的构造器，不发布字幕事件。
      */
     public DramaWriteService(DramaMapper dramaMapper,
                              EpisodeMapper episodeMapper,
                              DramaReviewService reviewService,
                              CacheEvictor cacheEvictor) {
-        this.dramaMapper = dramaMapper;
-        this.episodeMapper = episodeMapper;
-        this.reviewService = reviewService;
-        this.cacheEvictor = cacheEvictor;
+        this(dramaMapper, episodeMapper, reviewService, cacheEvictor, null);
     }
 
     /**
@@ -150,9 +168,11 @@ public class DramaWriteService {
         dramaMapper.updateById(drama);
 
         // 3. 新增/更新剧集，未提交的旧剧集下线
+        List<DramaEpisode> before = episodeMapper.selectByDramaId(dramaId);
         upsertEpisodes(dramaId, episodes);
         episodeMapper.offlineMissingEpisodes(dramaId,
                 episodes.stream().map(EpisodeWriteItem::episodeNo).toList());
+        publishTranscriptDeletes(before, dramaId);
 
         // 4. 草稿不会出现在公开缓存，但可能在驳回前缓存过
         cacheEvictor.evictDetailAfterCommit(dramaId);
@@ -210,6 +230,28 @@ public class DramaWriteService {
                     }
                 })
                 .toList();
+    }
+
+    /**
+     * 对本次被下线或删除的剧集发布字幕索引删除事件。
+     */
+    private void publishTranscriptDeletes(List<DramaEpisode> before, Long dramaId) {
+        if (transcriptPublisher == null || before == null || before.isEmpty()) {
+            return;
+        }
+        Set<Long> onlineAfter = new HashSet<>();
+        for (DramaEpisode episode : episodeMapper.selectByDramaId(dramaId)) {
+            if (Integer.valueOf(1).equals(episode.getStatus())) {
+                onlineAfter.add(episode.getId());
+            }
+        }
+        for (DramaEpisode episode : before) {
+            if (Integer.valueOf(1).equals(episode.getStatus())
+                    && !onlineAfter.contains(episode.getId())) {
+                transcriptPublisher.publishAfterCommit(
+                        episode.getId(), DramaChangedAction.DELETE);
+            }
+        }
     }
 
     /**

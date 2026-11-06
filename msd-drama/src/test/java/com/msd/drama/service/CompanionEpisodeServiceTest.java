@@ -42,6 +42,7 @@ class CompanionEpisodeServiceTest {
         CompanionEpisodeRow row = row();
         row.setSummary(null);
         row.setDramaDescription("简".repeat(600));
+        row.setPricePoints(30);
         when(episodeMapper.selectCompanionEpisodeById(6001L)).thenReturn(row);
 
         CompanionEpisodeDTO dto = service.getCompanionEpisode(6001L);
@@ -54,6 +55,7 @@ class CompanionEpisodeServiceTest {
         assertThat(dto.summary()).isEmpty();
         assertThat(dto.summaryStatus()).isZero();
         assertThat(dto.dramaDescription()).hasSize(500);
+        assertThat(dto.pricePoints()).isEqualTo(30);
     }
 
     /**

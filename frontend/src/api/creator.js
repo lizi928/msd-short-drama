@@ -43,3 +43,18 @@ export function deleteDrama(dramaId) {
 export function submitDrama(dramaId) {
     return request(`${BASE}/${dramaId}/submit`, { method: 'POST' })
 }
+
+/**
+ * 导入 SRT/VTT 字幕，覆盖该集同语言旧字幕。
+ *
+ * @param {number|string} dramaId 短剧 ID
+ * @param {number|string} episodeId 剧集 ID
+ * @param {{language: string, format: string, content: string}} payload 字幕内容
+ */
+export function importSubtitle(dramaId, episodeId, payload) {
+    return request(`${BASE}/${dramaId}/episodes/${episodeId}/subtitles`, {
+        method: 'POST',
+        body: payload,
+        timeoutMs: 30000
+    })
+}

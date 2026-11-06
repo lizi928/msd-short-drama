@@ -160,6 +160,46 @@ CREATE TABLE IF NOT EXISTS `t_drama_episode` (
   COLLATE = utf8mb4_0900_ai_ci
   COMMENT = '短剧剧集';
 
+-- 字幕文件元数据：一集一种语言保留一份，ASR 或人工上传覆盖旧版本
+CREATE TABLE IF NOT EXISTS `t_episode_subtitle` (
+    `id`            BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT COMMENT '字幕 ID',
+    `episode_id`    BIGINT UNSIGNED  NOT NULL                COMMENT '剧集 ID',
+    `language`      VARCHAR(16)      NOT NULL DEFAULT 'zh'   COMMENT '语言',
+    `format`        VARCHAR(16)      NOT NULL DEFAULT 'SRT'  COMMENT '格式：SRT/VTT/ASR',
+    `object_key`    VARCHAR(512)     NOT NULL DEFAULT ''     COMMENT '原始字幕对象键；Demo 存内容哈希',
+    `source`        VARCHAR(16)      NOT NULL DEFAULT 'UPLOAD' COMMENT '来源：UPLOAD/ASR',
+    `status`        TINYINT UNSIGNED NOT NULL DEFAULT 1      COMMENT '状态：0 隐藏，1 可用',
+    `segment_count` INT UNSIGNED     NOT NULL DEFAULT 0      COMMENT '片段数',
+    `create_time`   DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_time`   DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_episode_language` (`episode_id`, `language`),
+    KEY `idx_episode` (`episode_id`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci
+  COMMENT = '分集字幕元数据';
+
+-- 带时间戳的字幕片段，供剧情问答按播放位置防剧透检索
+CREATE TABLE IF NOT EXISTS `t_episode_transcript_segment` (
+    `id`          BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT COMMENT '片段 ID',
+    `subtitle_id` BIGINT UNSIGNED  NOT NULL                COMMENT '字幕 ID',
+    `episode_id`  BIGINT UNSIGNED  NOT NULL                COMMENT '剧集 ID',
+    `drama_id`    BIGINT UNSIGNED  NOT NULL                COMMENT '短剧 ID',
+    `episode_no`  INT UNSIGNED     NOT NULL                COMMENT '集数序号',
+    `start_ms`    INT UNSIGNED     NOT NULL                COMMENT '开始时间（毫秒）',
+    `end_ms`      INT UNSIGNED     NOT NULL                COMMENT '结束时间（毫秒）',
+    `text`        VARCHAR(1000)    NOT NULL                COMMENT '字幕文本',
+    `status`      TINYINT UNSIGNED NOT NULL DEFAULT 1      COMMENT '状态：0 隐藏，1 可用',
+    `create_time` DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_episode_time` (`episode_id`, `start_ms`),
+    KEY `idx_drama_episode` (`drama_id`, `episode_no`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci
+  COMMENT = '分集字幕片段';
+
 -- ============================================================
 -- 订单/积分域
 -- ============================================================
@@ -318,6 +358,9 @@ CREATE TABLE IF NOT EXISTS `t_comment` (
     `like_count`       BIGINT UNSIGNED  NOT NULL DEFAULT 0      COMMENT '点赞数（冗余）',
     `reply_count`      BIGINT UNSIGNED  NOT NULL DEFAULT 0      COMMENT '回复数（冗余，只记在根评论）',
     `status`           TINYINT UNSIGNED NOT NULL DEFAULT 1      COMMENT '状态：0 待审，1 可见，2 隐藏，3 已删除',
+    `ai_review_status` TINYINT UNSIGNED NOT NULL DEFAULT 0      COMMENT 'AI 审核状态：0 未审核，1 审核中，2 通过，3 风险，4 失败',
+    `ai_review_result` VARCHAR(4000)    NULL                    COMMENT 'AI 审核结果 JSON，仅作建议',
+    `ai_review_time`   DATETIME(3)      NULL                    COMMENT 'AI 审核时间',
     `create_time`      DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `update_time`      DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     PRIMARY KEY (`id`),
@@ -325,11 +368,70 @@ CREATE TABLE IF NOT EXISTS `t_comment` (
     KEY `idx_drama_root` (`drama_id`, `status`, `root_id`, `create_time`, `id`),
     KEY `idx_root` (`root_id`, `status`, `create_time`, `id`),
     KEY `idx_episode` (`episode_id`, `status`, `create_time`, `id`),
-    KEY `idx_user` (`user_id`, `create_time`, `id`)
+    KEY `idx_user` (`user_id`, `create_time`, `id`),
+    KEY `idx_ai_status` (`ai_review_status`, `create_time`, `id`)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_0900_ai_ci
   COMMENT = '评论';
+
+CREATE TABLE IF NOT EXISTS `t_ai_feedback` (
+    `id`         BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT COMMENT '反馈 ID',
+    `user_id`    BIGINT UNSIGNED  NOT NULL                COMMENT '反馈用户 ID',
+    `scene`      VARCHAR(32)      NOT NULL                COMMENT '场景：RAG_SEARCH/COMPANION/AUDIT/RECOMMEND',
+    `request_id` VARCHAR(64)      NOT NULL                COMMENT 'AI 回答请求 ID',
+    `rating`     TINYINT          NOT NULL                COMMENT '评分：1 有用，-1 没用',
+    `reason`     VARCHAR(64)      NOT NULL DEFAULT ''     COMMENT '结构化原因',
+    `comment`    VARCHAR(500)     NOT NULL DEFAULT ''     COMMENT '用户补充说明',
+    `target_id`  BIGINT UNSIGNED  NULL                    COMMENT '关联短剧/剧集 ID',
+    `session_id` VARCHAR(64)      NULL                    COMMENT '会话 ID',
+    `create_time` DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_scene_request` (`user_id`, `scene`, `request_id`),
+    KEY `idx_scene_rating_time` (`scene`, `rating`, `create_time`),
+    KEY `idx_request_id` (`request_id`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci
+  COMMENT = 'AI 回答反馈';
+
+CREATE TABLE IF NOT EXISTS `t_recommendation_exposure` (
+    `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '曝光 ID',
+    `request_id`    VARCHAR(64)     NOT NULL                COMMENT '推荐请求 ID',
+    `user_id`       BIGINT UNSIGNED NOT NULL                COMMENT '用户 ID',
+    `scene`         VARCHAR(32)     NOT NULL DEFAULT 'HOME_FEED' COMMENT '场景',
+    `algorithm`     VARCHAR(32)     NOT NULL DEFAULT ''     COMMENT '算法版本',
+    `experiment_id` VARCHAR(64)     NOT NULL DEFAULT ''     COMMENT '实验 ID',
+    `variant`       VARCHAR(32)     NOT NULL DEFAULT ''     COMMENT '实验分桶',
+    `drama_id`      BIGINT UNSIGNED NOT NULL                COMMENT '曝光短剧 ID',
+    `position`      INT UNSIGNED    NOT NULL DEFAULT 0      COMMENT '展示位置，从 1 开始',
+    `reason`        VARCHAR(256)    NOT NULL DEFAULT ''     COMMENT '推荐理由',
+    `create_time`   DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '曝光时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_request_drama` (`request_id`, `drama_id`),
+    KEY `idx_user_time` (`user_id`, `create_time`, `id`),
+    KEY `idx_drama_time` (`drama_id`, `create_time`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci
+  COMMENT = '推荐曝光归因';
+
+CREATE TABLE IF NOT EXISTS `t_recommendation_event` (
+    `id`          BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT COMMENT '事件 ID',
+    `request_id`  VARCHAR(64)      NOT NULL                COMMENT '推荐请求 ID',
+    `user_id`     BIGINT UNSIGNED  NOT NULL                COMMENT '用户 ID',
+    `drama_id`    BIGINT UNSIGNED  NOT NULL                COMMENT '短剧 ID',
+    `event_type`  TINYINT UNSIGNED NOT NULL                COMMENT '1 点击，2 播放，3 完播，4 不感兴趣',
+    `position`    INT UNSIGNED     NOT NULL DEFAULT 0      COMMENT '曝光位置',
+    `create_time` DATETIME(3)      NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '事件时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_request_drama_type` (`user_id`, `request_id`, `drama_id`, `event_type`),
+    KEY `idx_user_type_time` (`user_id`, `event_type`, `create_time`, `id`),
+    KEY `idx_request` (`request_id`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci
+  COMMENT = '推荐点击/播放/完播/负反馈事件';
 
 CREATE TABLE IF NOT EXISTS `t_watch_history` (
     `id`              BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT COMMENT '记录 ID',

@@ -54,7 +54,7 @@ const tabs = [
     width: min(100%, var(--app-width, 480px));
     padding-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--line);
-    background: rgba(9, 11, 16, 0.92);
+    background: rgba(255, 255, 255, 0.92);
     backdrop-filter: blur(18px);
     transform: translateX(-50%);
 }
@@ -79,10 +79,10 @@ const tabs = [
 }
 
 .tab-item.is-active {
-    color: var(--brand-2);
+    color: var(--brand-ink);
 }
 
 .tab-item.is-active svg {
-    filter: drop-shadow(0 0 9px rgba(255, 179, 63, 0.35));
+    filter: none;
 }
 </style>

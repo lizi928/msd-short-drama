@@ -1,6 +1,7 @@
 <script setup>
 import { formatCount } from '../../utils/format'
 import GradientCover from '../GradientCover.vue'
+import RelatedDramas from '../RelatedDramas.vue'
 
 /**
  * 短剧信息正文：移动端弹层和桌面侧栏共用同一份结构。
@@ -9,13 +10,18 @@ defineProps({
     detail: {
         type: Object,
         required: true
+    },
+    // 桌面右栏已有剧名头部，隐藏重复的封面与标题
+    showHead: {
+        type: Boolean,
+        default: true
     }
 })
 </script>
 
 <template>
     <div class="info-content">
-        <div class="info-head">
+        <div v-if="showHead" class="info-head">
             <div class="info-cover">
                 <GradientCover :seed="detail.id" :title="detail.title" :src="detail.coverUrl" ratio="thumb"/>
             </div>
@@ -45,6 +51,8 @@ defineProps({
         <div v-if="detail.tags?.length" class="info-tags">
             <span v-for="tag in detail.tags" :key="tag.id" class="chip">{{ tag.name }}</span>
         </div>
+
+        <RelatedDramas :drama-id="detail.id" :limit="6"/>
     </div>
 </template>
 
@@ -122,7 +130,7 @@ defineProps({
 }
 
 .info-desc p {
-    color: #c4cddd;
+    color: var(--text-soft);
     font-size: 13px;
     line-height: 1.8;
     white-space: pre-wrap;

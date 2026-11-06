@@ -11,6 +11,10 @@ public enum IntentRoute {
     AUDIT("audit-agent"),
     /** 数据分析和榜单解读。 */
     DATA("data-agent"),
+    /** 自然语言找剧。 */
+    SEARCH("search-agent"),
+    /** 根据偏好推荐短剧。 */
+    RECOMMEND("search-agent"),
     /** 评论、文案和社媒互动。 */
     SOCIAL("social-agent"),
     /** 无法判断或低置信度，交给 Supervisor 模型兜底。 */

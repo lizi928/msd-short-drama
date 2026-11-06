@@ -89,13 +89,13 @@ function badge(episode) {
     padding: 8px 9px;
     border: 1px solid var(--line);
     border-radius: 11px;
-    background: rgba(255, 255, 255, 0.035);
+    background: var(--surface-soft);
     color: var(--text);
     text-align: left;
 }
 
 .rail-item.is-active {
-    border-color: rgba(255, 179, 63, 0.65);
+    border-color: rgba(184, 58, 38, 0.4);
     background: var(--brand-soft);
 }
 

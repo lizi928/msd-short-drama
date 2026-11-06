@@ -21,6 +21,8 @@ public class CompanionProperties {
     private Memory memory = new Memory();
     // 伴看聊天配置
     private Chat chat = new Chat();
+    // 前情提要配置
+    private Recap recap = new Recap();
     // 轻量模型配置
     private LightModel lightModel = new LightModel();
 
@@ -72,6 +74,16 @@ public class CompanionProperties {
     /** 设置伴看聊天配置。 */
     public void setChat(Chat chat) {
         this.chat = chat;
+    }
+
+    /** 前情提要配置。 */
+    public Recap getRecap() {
+        return recap;
+    }
+
+    /** 设置前情提要配置。 */
+    public void setRecap(Recap recap) {
+        this.recap = recap;
     }
 
     /** 轻量模型配置。 */
@@ -265,6 +277,25 @@ public class CompanionProperties {
         /** 设置聊天接口整体超时（毫秒）。 */
         public void setTimeoutMs(long timeoutMs) {
             this.timeoutMs = timeoutMs;
+        }
+    }
+
+    /**
+     * 前情提要配置。
+     */
+    public static class Recap {
+
+        // 最多返回的当前集之前的分集数
+        private int maxPrevious = 5;
+
+        /** 最多返回的当前集之前的分集数。 */
+        public int getMaxPrevious() {
+            return maxPrevious;
+        }
+
+        /** 设置最多返回的当前集之前的分集数。 */
+        public void setMaxPrevious(int maxPrevious) {
+            this.maxPrevious = maxPrevious;
         }
     }
 

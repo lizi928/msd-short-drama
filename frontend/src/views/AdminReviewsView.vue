@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import {
     auditDrama,
+    auditPendingDramas,
     decideReview,
     fetchReviewLogs,
     fetchReviewQueue,
@@ -10,7 +11,9 @@ import {
 } from '../api/admin'
 import { usePagedList } from '../composables/usePagedList'
 import { useToastStore } from '../stores/toast'
+import { aiFlagLabels } from '../utils/aiFlags'
 import { formatDateTime } from '../utils/format'
+import AiFeedback from '../components/AiFeedback.vue'
 import AppModal from '../components/AppModal.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -22,8 +25,18 @@ import SkeletonBlock from '../components/SkeletonBlock.vue'
 const toast = useToastStore()
 
 const reviewFilter = ref(1)
+const aiFilter = ref(null)
 const auditingId = ref(0)
+const batchOpen = ref(false)
+const batchLoading = ref(false)
+const batchResult = ref(null)
+const batchResultOpen = ref(false)
+const detailOpen = ref(false)
+const detailTarget = ref(null)
 const reindexLoading = ref(false)
+const reindexOpen = ref(false)
+const reindexResult = ref(null)
+const reindexResultOpen = ref(false)
 const decisionOpen = ref(false)
 const decisionTarget = ref(null)
 const decision = ref('APPROVE')
@@ -50,6 +63,7 @@ const {
 } = usePagedList(
     ({ pageNo, pageSize }) => fetchReviewQueue({
         reviewStatus: reviewFilter.value,
+        aiReviewStatus: aiFilter.value,
         pageNo,
         pageSize
     }),
@@ -81,12 +95,36 @@ const filters = [
     { label: '已下架', value: 4 }
 ]
 
+const aiFilters = [
+    { label: 'AI 全部', value: null },
+    { label: '未提交', value: 0 },
+    { label: '待审', value: 1 },
+    { label: '通过', value: 2 },
+    { label: '驳回', value: 3 },
+    { label: '失败', value: 4 }
+]
+
 const canSubmitDecision = computed(() => (
     !decisionLoading.value
     && (decision.value === 'APPROVE' || remark.value.trim().length > 0)
 ))
 
-watch(reviewFilter, () => refresh())
+const detailData = computed(() => (
+    detailTarget.value ? parseAiResult(detailTarget.value) : null
+))
+
+const detailMalformed = computed(() => (
+    Boolean(detailTarget.value?.aiReviewResult) && !detailData.value
+))
+
+const detailAdvisory = computed(() => {
+    const advisory = detailData.value?.advisory
+    return advisory && typeof advisory === 'object' ? advisory : null
+})
+
+const detailFlags = computed(() => aiFlagLabels(detailData.value?.degradedFlags))
+
+watch([reviewFilter, aiFilter], () => refresh())
 
 function statusLabel(status) {
     return STATUS_LABELS[Number(status)] || '未知'
@@ -111,7 +149,8 @@ function parseAiResult(item) {
         return null
     }
     try {
-        return JSON.parse(item.aiReviewResult)
+        const parsed = JSON.parse(item.aiReviewResult)
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
     } catch {
         return null
     }
@@ -123,10 +162,12 @@ function parseAiResult(item) {
 function aiSummary(item) {
     const payload = parseAiResult(item)
     if (!payload) {
-        return item.aiReviewResult ? item.aiReviewResult.slice(0, 100) : '尚未执行 AI 审核'
+        return item.aiReviewResult
+            ? 'AI 结果损坏，请重新审核'
+            : '尚未执行 AI 审核'
     }
     if (payload.degraded) {
-        const flags = Array.isArray(payload.degradedFlags) ? payload.degradedFlags : []
+        const flags = aiFlagLabels(payload.degradedFlags)
         return `AI 降级：${flags.join('、') || '未知原因'}`
     }
     const verdict = payload.verdict
@@ -173,25 +214,13 @@ function tagNames(advisory) {
 }
 
 /**
- * 情感证据，作为 chip 的 title。
+ * 建议标签及命中片数，详情中展示 support。
  */
-function sentimentTitle(advisory) {
-    const evidence = advisory?.sentiment?.evidence
-    return Array.isArray(evidence) && evidence.length
-        ? `证据：${evidence.join('；')}`
-        : 'AI 内容情感倾向（仅供参考）'
-}
-
-/**
- * 标签证据，作为标签文案的 title。
- */
-function tagsTitle(advisory) {
+function tagLabels(advisory) {
     const tags = Array.isArray(advisory?.tags) ? advisory.tags : []
-    const details = tags.map((tag) => {
-        const evidence = Array.isArray(tag?.evidence) ? tag.evidence : []
-        return evidence.length ? `${tag.name}：${evidence.join('；')}` : tag?.name
-    }).filter(Boolean)
-    return details.length ? details.join('\n') : '仅作为审核建议'
+    return tags
+        .filter((tag) => tag?.name)
+        .map((tag) => (Number(tag.support) > 0 ? `${tag.name}(${tag.support})` : tag.name))
 }
 
 /**
@@ -199,6 +228,48 @@ function tagsTitle(advisory) {
  */
 function isPartialAdvisory(advisory) {
     return !advisory?.degraded && Number(advisory?.failedChunks) > 0
+}
+
+/**
+ * AI 审核按钮文案：失败项显示为重试。
+ */
+function auditActionText(item) {
+    return Number(item.aiReviewStatus) === 4 ? '重新 AI 审核' : 'AI 审核'
+}
+
+/**
+ * 打开 AI 审核详情抽屉。
+ */
+function openDetail(item) {
+    detailTarget.value = item
+    detailOpen.value = true
+}
+
+/**
+ * 汇总情感和标签证据，供详情抽屉展开查看。
+ */
+function advisoryEvidence(advisory) {
+    if (!advisory) {
+        return []
+    }
+    const evidence = []
+    const sentimentEvidence = Array.isArray(advisory.sentiment?.evidence)
+        ? advisory.sentiment.evidence : []
+    sentimentEvidence.forEach((text) => {
+        if (text) {
+            evidence.push(`情感：${text}`)
+        }
+    })
+    const tags = Array.isArray(advisory.tags) ? advisory.tags : []
+    tags.forEach((tag) => {
+        const tagEvidence = Array.isArray(tag?.evidence) ? tag.evidence : []
+        if (tag?.name) {
+            evidence.push(tagEvidence.length
+                ? `${tag.name}：${tagEvidence.join('；')}`
+                : `${tag.name}：无原文证据`)
+        }
+    })
+    return evidence
 }
 
 /**
@@ -218,11 +289,52 @@ async function runAudit(item) {
         } else {
             toast.push('AI 结果未写回，状态可能已变化')
         }
+        if (detailTarget.value?.dramaId === item.dramaId) {
+            detailOpen.value = false
+        }
         await refresh()
     } catch (cause) {
         toast.push(cause?.message || 'AI 审核失败')
     } finally {
         auditingId.value = 0
+    }
+}
+
+/**
+ * 打开批量 AI 审核确认。
+ */
+function openBatch() {
+    if (!batchLoading.value && !auditingId.value) {
+        batchOpen.value = true
+    }
+}
+
+/**
+ * 批量审核当前筛选下最多 5 条；查看 AI 失败时同时重试失败项。
+ */
+async function confirmBatch() {
+    if (batchLoading.value) {
+        return
+    }
+    batchLoading.value = true
+    try {
+        const result = await auditPendingDramas({
+            limit: 5,
+            includeFailed: aiFilter.value === 4
+        })
+        batchResult.value = result || null
+        batchOpen.value = false
+        batchResultOpen.value = true
+        if (result?.degradedFlags?.includes('drama')) {
+            toast.push('短剧服务暂不可用，请稍后重试')
+        } else {
+            toast.success(`批量审核完成：${result?.audited || 0} 条`)
+        }
+        await refresh()
+    } catch (cause) {
+        toast.push(cause?.message || '批量审核失败')
+    } finally {
+        batchLoading.value = false
     }
 }
 
@@ -293,7 +405,16 @@ async function confirmOffline() {
 }
 
 /**
- * 新剧上架后重建推荐索引。
+ * 重建索引涉及全量拉取和写入，先二次确认。
+ */
+function openReindex() {
+    if (!reindexLoading.value) {
+        reindexOpen.value = true
+    }
+}
+
+/**
+ * 新剧上架后重建推荐索引，并展示完整结果。
  */
 async function rebuildIndex() {
     if (reindexLoading.value) {
@@ -302,7 +423,14 @@ async function rebuildIndex() {
     reindexLoading.value = true
     try {
         const result = await reindexRag()
-        toast.success(`索引已重建：${result.dramaCount} 部短剧 / ${result.episodeCount} 集`)
+        reindexResult.value = result || null
+        reindexOpen.value = false
+        reindexResultOpen.value = true
+        if (result?.partial) {
+            toast.push('索引只完成了一部分，请查看详情')
+        } else {
+            toast.success(`索引已重建：${result?.dramaCount || 0} 部短剧 / ${result?.episodeCount || 0} 集`)
+        }
     } catch (cause) {
         toast.push(cause?.message || '索引重建失败')
     } finally {
@@ -319,7 +447,7 @@ async function rebuildIndex() {
                     class="btn btn-ghost btn-small"
                     type="button"
                     :disabled="reindexLoading"
-                    @click="rebuildIndex"
+                    @click="openReindex"
                 >
                     {{ reindexLoading ? '重建中…' : '重建索引' }}
                 </button>
@@ -338,6 +466,31 @@ async function rebuildIndex() {
                 >
                     {{ item.label }}
                 </button>
+            </div>
+
+            <div class="filter-strip ai-filter-strip" aria-label="AI 审核状态筛选">
+                <button
+                    v-for="item in aiFilters"
+                    :key="`ai-${String(item.value)}`"
+                    class="chip"
+                    :class="{ 'is-active': aiFilter === item.value }"
+                    type="button"
+                    @click="aiFilter = item.value"
+                >
+                    {{ item.label }}
+                </button>
+            </div>
+
+            <div class="review-toolbar">
+                <button
+                    class="btn btn-primary btn-small"
+                    type="button"
+                    :disabled="batchLoading || Boolean(auditingId)"
+                    @click="openBatch"
+                >
+                    {{ batchLoading ? '批量审核中…' : '批量 AI 审核（5 条）' }}
+                </button>
+                <span>AI 只写建议，人工决定最终状态</span>
             </div>
 
             <div v-if="loading" class="card-list">
@@ -379,7 +532,6 @@ async function rebuildIndex() {
                                 <span
                                     class="adv-chip"
                                     :class="sentimentClass(aiAdvisory(item))"
-                                    :title="sentimentTitle(aiAdvisory(item))"
                                 >
                                     情感：{{ sentimentText(aiAdvisory(item)) }}
                                 </span>
@@ -392,10 +544,16 @@ async function rebuildIndex() {
                                 <span
                                     v-if="tagNames(aiAdvisory(item)).length"
                                     class="adv-tags"
-                                    :title="tagsTitle(aiAdvisory(item))"
                                 >
                                     建议标签：{{ tagNames(aiAdvisory(item)).join('、') }}（仅供参考）
                                 </span>
+                                <button
+                                    class="adv-link"
+                                    type="button"
+                                    @click="openDetail(item)"
+                                >
+                                    查看证据
+                                </button>
                                 <span
                                     v-if="isPartialAdvisory(aiAdvisory(item))"
                                     class="adv-note"
@@ -425,7 +583,7 @@ async function rebuildIndex() {
                                 :disabled="auditingId === item.dramaId"
                                 @click="runAudit(item)"
                             >
-                                {{ auditingId === item.dramaId ? '审核中…' : 'AI 审核' }}
+                                {{ auditingId === item.dramaId ? '审核中…' : auditActionText(item) }}
                             </button>
                             <button
                                 v-if="Number(item.reviewStatus) === 1"
@@ -450,6 +608,13 @@ async function rebuildIndex() {
                                 @click="openOffline(item)"
                             >
                                 下架
+                            </button>
+                            <button
+                                class="btn btn-ghost btn-small"
+                                type="button"
+                                @click="openDetail(item)"
+                            >
+                                AI 详情
                             </button>
                             <button
                                 class="btn btn-ghost btn-small"
@@ -509,6 +674,203 @@ async function rebuildIndex() {
                     </p>
                     <p v-if="log.remark">{{ log.remark }}</p>
                     <time>{{ formatDateTime(log.createTime) }}</time>
+                </div>
+            </div>
+        </AppModal>
+
+        <AppModal v-model="detailOpen" size="lg" title="AI 审核详情">
+            <div v-if="detailTarget" class="ai-detail">
+                <div class="detail-head">
+                    <strong>{{ detailTarget.title }}</strong>
+                    <span class="status-chip" :class="`status-${detailTarget.reviewStatus}`">
+                        {{ aiLabel(detailTarget.aiReviewStatus) }}
+                    </span>
+                </div>
+                <p class="detail-meta">
+                    提交 {{ detailTarget.submitTime ? formatDateTime(detailTarget.submitTime) : '未提交' }}
+                    · AI 审核
+                    {{ detailTarget.aiReviewTime ? formatDateTime(detailTarget.aiReviewTime) : '未执行' }}
+                </p>
+
+                <p v-if="detailMalformed" class="detail-error">
+                    AI 结果损坏，请重新审核。
+                </p>
+
+                <template v-else-if="detailData">
+                    <section class="detail-section">
+                        <h3>合规结论</h3>
+                        <p v-if="detailData.verdict">
+                            {{ detailData.verdict.is_violation ? '发现风险' : '未发现违规' }}
+                            <template v-if="detailData.verdict.violation_reason">
+                                ：{{ detailData.verdict.violation_reason }}
+                            </template>
+                        </p>
+                        <p v-else>AI 未返回有效结论。</p>
+                        <div v-if="detailData.verdict?.tags?.length" class="detail-tags">
+                            <span
+                                v-for="tag in detailData.verdict.tags"
+                                :key="tag"
+                                class="detail-tag"
+                            >
+                                {{ tag }}
+                            </span>
+                        </div>
+                    </section>
+
+                    <section v-if="detailAdvisory" class="detail-section">
+                        <h3>情感与标签建议</h3>
+                        <p>
+                            情感：{{ sentimentText(detailAdvisory) }}
+                            <span class="detail-support">
+                                支持片段 {{ detailAdvisory.sentiment?.support ?? 0 }}
+                            </span>
+                            <span
+                                v-if="detailAdvisory.sentiment?.highNegative"
+                                class="detail-warn"
+                            >
+                                建议人工复核
+                            </span>
+                        </p>
+                        <p v-if="tagLabels(detailAdvisory).length">
+                            建议标签：{{ tagLabels(detailAdvisory).join('、') }}（括号内为命中片数，仅供参考）
+                        </p>
+                        <p>
+                            分析片段 {{ detailAdvisory.chunks ?? '—' }}
+                            · 失败 {{ detailAdvisory.failedChunks ?? 0 }}
+                            <template v-if="detailAdvisory.truncated"> · 文本较长，仅分析前部</template>
+                        </p>
+                        <p v-if="detailAdvisory.degraded" class="detail-warn">
+                            情感/标签建议降级：{{ aiFlagLabels(detailAdvisory.degradedFlags).join('、') || '未知原因' }}
+                        </p>
+                        <div v-if="advisoryEvidence(detailAdvisory).length" class="detail-evidence">
+                            <h4>证据</h4>
+                            <ul>
+                                <li
+                                    v-for="item in advisoryEvidence(detailAdvisory)"
+                                    :key="item"
+                                >
+                                    {{ item }}
+                                </li>
+                            </ul>
+                        </div>
+                    </section>
+
+                    <section class="detail-section">
+                        <h3>运行信息</h3>
+                        <dl class="detail-grid">
+                            <div>
+                                <dt>耗时</dt>
+                                <dd>{{ detailData.elapsedMs ?? '—' }} ms</dd>
+                            </div>
+                            <div>
+                                <dt>审核时间</dt>
+                                <dd>{{ detailData.auditedAt ? formatDateTime(detailData.auditedAt) : '—' }}</dd>
+                            </div>
+                            <div>
+                                <dt>降级标记</dt>
+                                <dd>{{ detailFlags.join('、') || '无' }}</dd>
+                            </div>
+                            <div>
+                                <dt>AI 状态</dt>
+                                <dd>{{ aiLabel(detailTarget.aiReviewStatus) }}</dd>
+                            </div>
+                        </dl>
+                    </section>
+
+                    <p class="detail-hint">AI 仅供参考，人工审核决定最终状态。</p>
+
+                    <AiFeedback
+                        v-if="detailData.requestId"
+                        scene="AUDIT"
+                        :request-id="detailData.requestId"
+                        :target-id="detailTarget.dramaId"
+                    />
+
+                    <details class="raw-json">
+                        <summary>原始 JSON</summary>
+                        <pre>{{ detailTarget.aiReviewResult }}</pre>
+                    </details>
+                </template>
+
+                <p v-else class="detail-hint">尚未执行 AI 审核。</p>
+
+                <div
+                    v-if="Number(detailTarget.aiReviewStatus) === 4
+                        && Number(detailTarget.reviewStatus) === 1"
+                    class="detail-actions"
+                >
+                    <button
+                        class="btn btn-primary btn-small"
+                        type="button"
+                        :disabled="auditingId === detailTarget.dramaId"
+                        @click="runAudit(detailTarget)"
+                    >
+                        {{ auditingId === detailTarget.dramaId ? '审核中…' : '重新 AI 审核' }}
+                    </button>
+                </div>
+            </div>
+        </AppModal>
+
+        <ConfirmDialog
+            v-model="batchOpen"
+            title="批量 AI 审核"
+            message="将审核最多 5 条短剧。AI 只写 ai_review_* 建议，不会改变人工审核状态。"
+            confirm-text="开始审核"
+            :loading="batchLoading"
+            @confirm="confirmBatch"
+        />
+
+        <AppModal v-model="batchResultOpen" size="lg" title="批量审核结果">
+            <div v-if="batchResult" class="batch-result">
+                <div class="result-grid">
+                    <div><span>扫描</span><strong>{{ batchResult.scanned ?? 0 }}</strong></div>
+                    <div><span>已审核</span><strong>{{ batchResult.audited ?? 0 }}</strong></div>
+                    <div><span>通过</span><strong>{{ batchResult.passed ?? 0 }}</strong></div>
+                    <div><span>驳回</span><strong>{{ batchResult.rejected ?? 0 }}</strong></div>
+                    <div><span>失败</span><strong>{{ batchResult.failed ?? 0 }}</strong></div>
+                    <div><span>跳过</span><strong>{{ batchResult.skipped ?? 0 }}</strong></div>
+                </div>
+                <p v-if="batchResult.degradedFlags?.length" class="result-warn">
+                    降级标记：{{ aiFlagLabels(batchResult.degradedFlags).join('、') }}
+                </p>
+                <p class="detail-hint">AI 结果仅供参考，人工审核决定最终状态。</p>
+            </div>
+        </AppModal>
+
+        <ConfirmDialog
+            v-model="reindexOpen"
+            title="重建 RAG 索引"
+            message="将全量拉取已上架短剧并重写 Milvus 与 Elasticsearch 索引。重建期间检索可能只返回部分结果。"
+            confirm-text="开始重建"
+            :loading="reindexLoading"
+            @confirm="rebuildIndex"
+        />
+
+        <AppModal v-model="reindexResultOpen" size="lg" title="索引重建结果">
+            <div v-if="reindexResult" class="batch-result">
+                <p
+                    class="result-banner"
+                    :class="reindexResult.partial ? 'is-warning' : 'is-ok'"
+                >
+                    {{ reindexResult.partial ? '索引只完成了一部分' : '索引重建完成' }}
+                </p>
+                <div class="result-grid">
+                    <div><span>短剧</span><strong>{{ reindexResult.dramaCount ?? 0 }}</strong></div>
+                    <div><span>分集</span><strong>{{ reindexResult.episodeCount ?? 0 }}</strong></div>
+                    <div><span>Milvus</span><strong>{{ reindexResult.vectorUpserted ?? 0 }}</strong></div>
+                    <div><span>ES/BM25</span><strong>{{ reindexResult.esIndexed ?? 0 }}</strong></div>
+                    <div><span>清理旧向量</span><strong>{{ reindexResult.staleDeleted ?? 0 }}</strong></div>
+                    <div><span>耗时</span><strong>{{ reindexResult.elapsedMs ?? 0 }} ms</strong></div>
+                </div>
+                <p class="detail-meta">
+                    Milvus {{ reindexResult.vectorAvailable ? '可用' : '不可用' }}
+                    · Elasticsearch {{ reindexResult.bm25Available ? '可用' : '不可用' }}
+                </p>
+                <div v-if="reindexResult.errors?.length" class="result-errors">
+                    <h3>错误信息</h3>
+                    <ul>
+                        <li v-for="item in reindexResult.errors" :key="item">{{ item }}</li>
+                    </ul>
                 </div>
             </div>
         </AppModal>
@@ -601,17 +963,17 @@ async function rebuildIndex() {
 }
 
 .status-1 {
-    border-color: rgba(255, 179, 63, 0.45);
-    color: var(--brand-2);
+    border-color: #f0ddb4;
+    color: var(--warning-ink);
 }
 
 .status-2 {
-    border-color: rgba(71, 209, 140, 0.45);
+    border-color: #b9e6d0;
     color: var(--ok);
 }
 
 .status-3 {
-    border-color: rgba(255, 92, 61, 0.45);
+    border-color: #f0c6c6;
     color: var(--danger);
 }
 
@@ -619,7 +981,7 @@ async function rebuildIndex() {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    color: rgba(255, 255, 255, 0.36);
+    color: var(--muted-soft);
     font-size: 10px;
 }
 
@@ -634,15 +996,16 @@ async function rebuildIndex() {
     padding: 8px 10px;
     border: 1px solid var(--line);
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.025);
+    background: var(--surface-soft);
     color: var(--muted);
     font-size: 11px;
     line-height: 1.6;
 }
 
 .ai-summary.degraded {
-    border-color: rgba(255, 92, 61, 0.3);
-    color: var(--brand-2);
+    border-color: #f0ddb4;
+    background: var(--warning-soft);
+    color: var(--warning-ink);
 }
 
 .ai-advisory {
@@ -663,23 +1026,23 @@ async function rebuildIndex() {
 }
 
 .adv-chip.is-positive {
-    border-color: rgba(71, 209, 140, 0.45);
+    border-color: #b9e6d0;
     color: var(--ok);
 }
 
 .adv-chip.is-negative {
-    border-color: rgba(255, 92, 61, 0.4);
+    border-color: #f0c6c6;
     color: var(--danger);
 }
 
 .adv-chip.is-mixed {
-    border-color: rgba(255, 179, 63, 0.45);
-    color: var(--brand-2);
+    border-color: #f0ddb4;
+    color: var(--warning-ink);
 }
 
 .adv-chip.is-danger {
-    border-color: rgba(255, 92, 61, 0.55);
-    background: rgba(255, 92, 61, 0.1);
+    border-color: #f0c6c6;
+    background: var(--danger-soft);
     color: var(--danger);
 }
 
@@ -691,19 +1054,264 @@ async function rebuildIndex() {
 }
 
 .adv-note {
-    color: rgba(255, 255, 255, 0.36);
+    color: var(--muted-soft);
     font-size: 10px;
     line-height: 1.6;
 }
 
 .adv-note.is-warning {
-    color: var(--brand-2);
+    color: var(--warning-ink);
 }
 
 .review-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+}
+
+.ai-filter-strip {
+    padding-top: 2px;
+}
+
+.review-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.adv-link {
+    padding: 2px 0;
+    border: none;
+    background: transparent;
+    color: var(--brand-2);
+    font-size: 10px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.ai-detail {
+    display: grid;
+    gap: 14px;
+}
+
+.detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.detail-head strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 15px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.detail-meta {
+    margin: -6px 0 0;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.detail-error {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid #f0c6c6;
+    border-radius: 10px;
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 12px;
+}
+
+.detail-section {
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-soft);
+}
+
+.detail-section h3 {
+    margin: 0;
+    color: var(--text);
+    font-size: 12px;
+}
+
+.detail-section p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.65;
+}
+
+.detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.detail-tag {
+    padding: 2px 8px;
+    border: 1px solid rgba(184, 58, 38, 0.3);
+    border-radius: 999px;
+    background: var(--brand-soft);
+    color: var(--brand-ink);
+    font-size: 10px;
+}
+
+.detail-support {
+    margin-left: 6px;
+    color: var(--muted-soft);
+    font-size: 10px;
+}
+
+.detail-warn {
+    margin-left: 6px;
+    color: var(--danger);
+    font-size: 10px;
+}
+
+.detail-evidence h4 {
+    margin: 4px 0 2px;
+    color: var(--text);
+    font-size: 11px;
+}
+
+.detail-evidence ul,
+.result-errors ul {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding-left: 18px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+}
+
+.detail-grid div {
+    display: grid;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: var(--surface-muted);
+}
+
+.detail-grid dt {
+    color: var(--muted-soft);
+    font-size: 10px;
+}
+
+.detail-grid dd {
+    margin: 0;
+    color: var(--text);
+    font-size: 11px;
+}
+
+.detail-hint {
+    margin: 0;
+    color: var(--muted-soft);
+    font-size: 10px;
+    line-height: 1.6;
+}
+
+.raw-json summary {
+    color: var(--muted);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.raw-json pre {
+    overflow: auto;
+    max-height: 220px;
+    margin: 8px 0 0;
+    padding: 10px;
+    border-radius: 9px;
+    background: rgba(0, 0, 0, 0.28);
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 10px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.detail-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.batch-result {
+    display: grid;
+    gap: 12px;
+}
+
+.result-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.result-grid > div {
+    display: grid;
+    gap: 3px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-soft);
+}
+
+.result-grid span {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.result-grid strong {
+    color: var(--text);
+    font-size: 16px;
+}
+
+.result-warn {
+    margin: 0;
+    color: var(--brand-2);
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.result-banner {
+    margin: 0;
+    padding: 9px 11px;
+    border-radius: 9px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.result-banner.is-ok {
+    background: var(--ok-soft);
+    color: var(--ok);
+}
+
+.result-banner.is-warning {
+    background: var(--warning-soft);
+    color: var(--warning-ink);
+}
+
+.result-errors h3 {
+    margin: 0 0 4px;
+    color: var(--danger);
+    font-size: 11px;
 }
 
 .decision-form {
@@ -729,7 +1337,7 @@ async function rebuildIndex() {
     padding: 10px 12px;
     border: 1px solid var(--line);
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.025);
+    background: var(--surface-soft);
 }
 
 .log-head {
@@ -756,7 +1364,7 @@ async function rebuildIndex() {
 }
 
 .log-row time {
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--muted-soft);
     font-size: 10px;
 }
 

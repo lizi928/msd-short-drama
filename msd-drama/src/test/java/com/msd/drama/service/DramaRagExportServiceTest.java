@@ -76,6 +76,60 @@ class DramaRagExportServiceTest {
     }
 
     /**
+     * 前情提要只透传当前集及之前的摘要和状态。
+     */
+    @Test
+    void recapsCurrentAndPreviousEpisodes() {
+        DramaEpisodeTitleRow first = episode(6401L, 1, "验尸", "第一集摘要");
+        first.setPricePoints(0);
+        first.setSummaryStatus(2);
+        DramaEpisodeTitleRow second = episode(6402L, 2, "追凶", "第二集摘要");
+        second.setPricePoints(30);
+        second.setSummaryStatus(2);
+        when(episodeMapper.selectRecapEpisodes(5005L, 2)).thenReturn(List.of(first, second));
+
+        List<com.msd.common.dto.RecapEpisodeDTO> result = service.recap(5005L, 2);
+
+        assertThat(result).extracting(
+                        com.msd.common.dto.RecapEpisodeDTO::episodeNo,
+                        com.msd.common.dto.RecapEpisodeDTO::summary,
+                        com.msd.common.dto.RecapEpisodeDTO::pricePoints,
+                        com.msd.common.dto.RecapEpisodeDTO::summaryStatus)
+                .containsExactly(
+                        tuple(1, "第一集摘要", 0, 2),
+                        tuple(2, "第二集摘要", 30, 2));
+    }
+
+    /**
+     * 规则兜底先按同分类和共同标签重排，再截断。
+     */
+    @Test
+    void relatedFallbackRanksCommonTagsBeforeHeat() {
+        Drama source = drama();
+        Drama hotOther = drama(5007L, 4L);
+        Drama sameCategory = drama(5006L, 3L);
+        Drama sameTags = drama(5008L, 4L);
+        when(dramaMapper.selectPublicById(5005L)).thenReturn(source);
+        when(dramaMapper.selectRelatedCandidates(5005L, 24))
+                .thenReturn(List.of(hotOther, sameCategory, sameTags));
+        when(categoryMapper.selectList(any())).thenReturn(List.of(category(), category(4L, "现代甜宠")));
+        when(tagMapper.selectVisibleTagNamesByDramaIds(List.of(5005L)))
+                .thenReturn(List.of(tag("悬疑"), tag("破案")));
+        when(tagMapper.selectVisibleTagNamesByDramaIds(List.of(5007L, 5006L, 5008L)))
+                .thenReturn(List.of(
+                        tag(5007L, "古装"),
+                        tag(5006L, "悬疑"),
+                        tag(5008L, "悬疑"),
+                        tag(5008L, "破案")));
+        when(episodeMapper.selectOnlineEpisodeTitlesByDramaIds(any())).thenReturn(List.of());
+
+        List<DramaRagExportDTO> result = service.relatedFallback(5005L, 6);
+
+        assertThat(result).extracting(DramaRagExportDTO::id)
+                .containsExactly(5006L, 5008L, 5007L);
+    }
+
+    /**
      * 空目录直接返回空分页，不查分类和标签。
      */
     @Test
@@ -92,13 +146,20 @@ class DramaRagExportServiceTest {
      * 构造短剧实体。
      */
     private Drama drama() {
+        return drama(5005L, 3L);
+    }
+
+    /**
+     * 构造指定 ID 和分类的短剧实体。
+     */
+    private Drama drama(Long id, Long categoryId) {
         Drama drama = new Drama();
-        drama.setId(5005L);
+        drama.setId(id);
         drama.setTitle("长安第一女仵作");
         drama.setSubtitle("验尸破案，顺便谈个恋爱");
-        drama.setCoverUrl("http://127.0.0.1:9000/msd/covers/5005.jpg");
+        drama.setCoverUrl("http://127.0.0.1:9000/msd/covers/" + id + ".jpg");
         drama.setDescription("长安城接连出现离奇命案。");
-        drama.setCategoryId(3L);
+        drama.setCategoryId(categoryId);
         drama.setActors("林一，苏晚");
         drama.setEpisodeCount(2);
         drama.setPublishTime(LocalDateTime.of(2026, 1, 1, 10, 0, 0));
@@ -113,9 +174,16 @@ class DramaRagExportServiceTest {
      * 构造分类实体。
      */
     private DramaCategory category() {
+        return category(3L, "古装悬疑");
+    }
+
+    /**
+     * 构造指定 ID 和名称的分类实体。
+     */
+    private DramaCategory category(Long id, String name) {
         DramaCategory category = new DramaCategory();
-        category.setId(3L);
-        category.setName("古装悬疑");
+        category.setId(id);
+        category.setName(name);
         return category;
     }
 
@@ -123,8 +191,15 @@ class DramaRagExportServiceTest {
      * 构造标签查询行。
      */
     private DramaTagNameRow tag(String name) {
+        return tag(5005L, name);
+    }
+
+    /**
+     * 构造指定短剧的标签查询行。
+     */
+    private DramaTagNameRow tag(Long dramaId, String name) {
         DramaTagNameRow row = new DramaTagNameRow();
-        row.setDramaId(5005L);
+        row.setDramaId(dramaId);
         row.setName(name);
         return row;
     }

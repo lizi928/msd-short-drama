@@ -82,13 +82,13 @@ function badge(episode) {
     padding: 10px;
     border: 1px solid var(--line);
     border-radius: 12px;
-    background: rgba(255, 255, 255, 0.035);
+    background: var(--surface-soft);
     color: var(--text);
     text-align: left;
 }
 
 .episode-tile.is-active {
-    border-color: rgba(255, 179, 63, 0.7);
+    border-color: rgba(184, 58, 38, 0.4);
     background: var(--brand-soft);
 }
 
@@ -115,23 +115,23 @@ function badge(episode) {
     width: fit-content;
     padding: 2px 6px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--surface-muted);
     color: var(--muted);
     font-size: 9px;
 }
 
 .episode-badge.is-free {
-    background: rgba(71, 209, 140, 0.14);
+    background: var(--ok-soft);
     color: var(--ok);
 }
 
 .episode-badge.is-unlocked {
-    background: rgba(255, 179, 63, 0.14);
-    color: var(--brand-2);
+    background: var(--brand-soft);
+    color: var(--brand-ink);
 }
 
 .episode-badge.is-price {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--surface-soft);
     color: var(--muted);
 }
 </style>

@@ -10,15 +10,21 @@ import java.util.Set;
  * @param categories       Top 分类权重
  * @param tags             Top 标签权重
  * @param recentDramaIds   最近互动的短剧 ID
- * @param favoriteDramaIds 收藏的短剧 ID
- * @param empty            是否没有可用偏好
- * @param degraded         画像是否因依赖失败而降级
+ * @param favoriteDramaIds   收藏的短剧 ID
+ * @param continueDramaIds   最近观看的短剧 ID
+ * @param coOccurrenceDramas 共同观看召回及得分
+ * @param dislikedDramaIds   用户标记“不感兴趣”的短剧 ID
+ * @param empty              是否没有可用偏好
+ * @param degraded           画像是否因依赖失败而降级
  */
 public record UserPreference(
         List<CategoryWeight> categories,
         List<TagWeight> tags,
         List<Long> recentDramaIds,
         List<Long> favoriteDramaIds,
+        List<Long> continueDramaIds,
+        List<DramaWeight> coOccurrenceDramas,
+        List<Long> dislikedDramaIds,
         boolean empty,
         boolean degraded
 ) {
@@ -31,13 +37,40 @@ public record UserPreference(
         tags = tags == null ? List.of() : List.copyOf(tags);
         recentDramaIds = recentDramaIds == null ? List.of() : List.copyOf(recentDramaIds);
         favoriteDramaIds = favoriteDramaIds == null ? List.of() : List.copyOf(favoriteDramaIds);
+        continueDramaIds = continueDramaIds == null ? List.of() : List.copyOf(continueDramaIds);
+        coOccurrenceDramas = coOccurrenceDramas == null
+                ? List.of() : List.copyOf(coOccurrenceDramas);
+        dislikedDramaIds = dislikedDramaIds == null ? List.of() : List.copyOf(dislikedDramaIds);
+    }
+
+    /**
+     * 兼容旧调用方，推荐归因字段为空。
+     */
+    public UserPreference(List<CategoryWeight> categories,
+                          List<TagWeight> tags,
+                          List<Long> recentDramaIds,
+                          List<Long> favoriteDramaIds,
+                          boolean empty,
+                          boolean degraded) {
+        this(categories, tags, recentDramaIds, favoriteDramaIds,
+                List.of(), List.of(), List.of(), empty, degraded);
     }
 
     /**
      * 空画像。
      */
     public static UserPreference empty(boolean degraded) {
-        return new UserPreference(List.of(), List.of(), List.of(), List.of(), true, degraded);
+        return new UserPreference(List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), List.of(), true, degraded);
+    }
+
+    /**
+     * 共同观看召回得分。
+     *
+     * @param dramaId 短剧 ID
+     * @param score   共现得分
+     */
+    public record DramaWeight(Long dramaId, double score) {
     }
 
     /**

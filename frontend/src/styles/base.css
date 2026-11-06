@@ -1,18 +1,45 @@
 :root {
-    color-scheme: dark;
-    --bg: #090b10;
-    --panel: #11151d;
-    --panel-strong: #161c27;
-    --text: #f4f7fb;
-    --muted: #94a1b6;
-    --line: rgba(255, 255, 255, 0.08);
-    --brand: #ff5c3d;
-    --brand-2: #ffb33f;
-    --brand-soft: rgba(255, 92, 61, 0.14);
-    --ok: #47d18c;
-    --danger: #ff6b6b;
-    --radius: 20px;
-    --shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+    color-scheme: light;
+    /* 画布与表面 */
+    --bg: #f4fbf7;
+    --bg-deep: #e9f2e5;
+    --surface: #ffffff;
+    --panel: #ffffff;
+    --panel-strong: #ffffff;
+    --surface-soft: #f6faf3;
+    --surface-muted: #edf4e9;
+    --surface-strong: #e1ebe0;
+    /* 文本 */
+    --text: #16211a;
+    --text-soft: #34463a;
+    --muted: #5f7266;
+    --muted-soft: #85968b;
+    /* 描边 */
+    --line: #dfe9da;
+    --line-strong: #c8d8c2;
+    /* 品牌 */
+    --brand: #ff6b4a;
+    --brand-ink: #b83a26;
+    /* 兼容旧变量名：浅底上直接使用 --brand-2 的文字自动变成可读珊瑚色 */
+    --brand-2: #b83a26;
+    --brand-2-bright: #f2a93b;
+    --brand-soft: #ffe7e0;
+    --warm: #f2a93b;
+    --warm-soft: #fff2d8;
+    /* 状态 */
+    --ok: #1f7a56;
+    --ok-soft: #ddf3e8;
+    --danger: #b33636;
+    --danger-soft: #fdeaea;
+    --warning-ink: #8a5b00;
+    --warning-soft: #fff2d8;
+    --focus-ink: #b83a26;
+    /* 形状与阴影 */
+    --radius: 16px;
+    --radius-lg: 22px;
+    --shadow: 0 18px 50px rgba(22, 33, 26, 0.10);
+    --shadow-soft: 0 8px 24px rgba(22, 33, 26, 0.07);
+    --shadow-media: 0 28px 80px rgba(0, 0, 0, 0.42);
     --app-width: 480px;
     --tabbar-height: 64px;
     /* 桌面壳尺寸；--app-width 仍只服务移动布局、Feed、Modal 和 Toast */
@@ -20,8 +47,17 @@
     --topbar-height: 64px;
     --content-max: 1360px;
     --shell-gutter: clamp(20px, 2.5vw, 40px);
-    --feed-info-width: 280px;
-    --feed-workspace-width: 340px;
+    --feed-workspace-width: clamp(320px, 27vw, 380px);
+    --feed-stage-max: 520px;
+    /* 媒体范围（视频、封面、Banner）专用 */
+    --media-bg: #05070a;
+    --media-glass: rgba(0, 0, 0, 0.34);
+    --media-glass-strong: rgba(0, 0, 0, 0.58);
+    --media-line: rgba(255, 255, 255, 0.16);
+    --on-media: #ffffff;
+    --on-media-muted: rgba(255, 255, 255, 0.72);
+    --scrim-top: linear-gradient(180deg, rgba(0, 0, 0, 0.62), transparent);
+    --scrim-bottom: linear-gradient(0deg, rgba(0, 0, 0, 0.80), transparent);
 }
 
 * {
@@ -42,9 +78,10 @@ body {
     margin: 0;
     min-height: 100dvh;
     background:
-        radial-gradient(900px 620px at 8% -12%, rgba(255, 92, 61, 0.18), transparent 62%),
-        radial-gradient(760px 520px at 102% -4%, rgba(255, 179, 63, 0.10), transparent 58%),
-        var(--bg);
+        radial-gradient(900px 620px at 8% -12%, rgba(47, 174, 122, 0.13), transparent 62%),
+        radial-gradient(760px 520px at 102% -4%, rgba(255, 107, 74, 0.08), transparent 58%),
+        linear-gradient(180deg, #f8fcf9 0%, #f2faf6 48%, #f7fbf8 100%);
+    background-attachment: fixed;
     color: var(--text);
     font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, -apple-system, sans-serif;
     font-size: 14px;
@@ -75,7 +112,7 @@ ol {
 }
 
 a {
-    color: var(--brand-2);
+    color: var(--brand-ink);
     text-decoration: none;
     -webkit-tap-highlight-color: transparent;
 }
@@ -97,16 +134,17 @@ button:disabled {
 }
 
 ::selection {
-    background: rgba(255, 179, 63, 0.32);
-    color: #fff;
+    background: rgba(255, 107, 74, 0.22);
+    color: var(--text);
 }
 
 .btn:focus-visible,
 input:focus-visible,
+select:focus-visible,
 textarea:focus-visible,
 a:focus-visible,
 button:focus-visible {
-    outline: 2px solid var(--brand-2);
+    outline: 2px solid var(--focus-ink);
     outline-offset: 2px;
 }
 
@@ -116,7 +154,7 @@ button:focus-visible {
 
 .eyebrow {
     display: inline-block;
-    color: var(--brand-2);
+    color: var(--brand-ink);
     font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.18em;
@@ -139,12 +177,12 @@ button:focus-visible {
     width: 44px;
     height: 44px;
     border-radius: 13px;
-    background: linear-gradient(135deg, var(--brand), var(--brand-2));
-    color: #1b0d08;
+    background: linear-gradient(135deg, var(--brand), var(--brand-2-bright));
+    color: #241009;
     font-size: 13px;
     font-weight: 900;
     letter-spacing: 0.06em;
-    box-shadow: 0 12px 28px rgba(255, 92, 61, 0.28);
+    box-shadow: 0 12px 28px rgba(255, 107, 74, 0.24);
 }
 
 .brand-name {
@@ -174,34 +212,34 @@ button:focus-visible {
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, var(--brand), var(--brand-2));
-    color: #1b0d08;
-    box-shadow: 0 12px 30px rgba(255, 92, 61, 0.26);
+    background: linear-gradient(135deg, var(--brand), var(--brand-2-bright));
+    color: #241009;
+    box-shadow: 0 12px 30px rgba(255, 107, 74, 0.24);
 }
 
 .btn-primary:hover:not(:disabled) {
-    filter: brightness(1.06);
+    filter: brightness(1.04);
 }
 
 .btn-ghost {
-    border-color: var(--line);
-    background: transparent;
-    color: var(--text);
+    border-color: var(--line-strong);
+    background: var(--surface);
+    color: var(--text-soft);
 }
 
 .btn-ghost:hover:not(:disabled) {
-    border-color: rgba(255, 179, 63, 0.55);
-    color: var(--brand-2);
+    border-color: rgba(184, 58, 38, 0.45);
+    color: var(--brand-ink);
 }
 
 .btn-danger {
-    border-color: rgba(255, 107, 107, 0.4);
-    background: rgba(255, 107, 107, 0.14);
-    color: #ffc2c2;
+    border-color: #f0c6c6;
+    background: var(--danger-soft);
+    color: var(--danger);
 }
 
 .btn-danger:hover:not(:disabled) {
-    background: rgba(255, 107, 107, 0.22);
+    background: #fbdede;
 }
 
 .btn-block {
@@ -235,19 +273,30 @@ button:focus-visible {
 }
 
 .field input,
-.field textarea {
+.field textarea,
+.field select {
     width: 100%;
     padding: 0 14px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-strong);
     border-radius: 12px;
-    background: rgba(0, 0, 0, 0.28);
+    background: var(--surface);
     color: var(--text);
     font-size: 16px;
     transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
 }
 
-.field input {
+.field input,
+.field select {
     height: 48px;
+}
+
+.field select {
+    appearance: none;
+    padding-right: 38px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235f7266' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    background-size: 16px;
 }
 
 .field textarea {
@@ -260,15 +309,16 @@ button:focus-visible {
 
 .field input::placeholder,
 .field textarea::placeholder {
-    color: rgba(255, 255, 255, 0.28);
+    color: var(--muted-soft);
 }
 
 .field input:focus,
-.field textarea:focus {
+.field textarea:focus,
+.field select:focus {
     outline: none;
-    border-color: rgba(255, 179, 63, 0.7);
-    background: rgba(0, 0, 0, 0.36);
-    box-shadow: 0 0 0 4px rgba(255, 179, 63, 0.12);
+    border-color: rgba(184, 58, 38, 0.55);
+    background: var(--surface);
+    box-shadow: 0 0 0 4px rgba(184, 58, 38, 0.10);
 }
 
 .field-grid {
@@ -279,10 +329,10 @@ button:focus-visible {
 
 .form-error {
     padding: 10px 12px;
-    border: 1px solid rgba(255, 107, 107, 0.3);
+    border: 1px solid #f0c6c6;
     border-radius: 10px;
-    background: rgba(255, 107, 107, 0.1);
-    color: #ffb3b3;
+    background: var(--danger-soft);
+    color: var(--danger);
     font-size: 12px;
 }
 
@@ -305,8 +355,8 @@ button:focus-visible {
     padding: 22px;
     border: 1px solid var(--line);
     border-radius: 20px;
-    background: linear-gradient(150deg, #241313 0%, #2b1712 42%, #151018 100%);
-    box-shadow: var(--shadow);
+    background: linear-gradient(150deg, #eaf7ef 0%, #f7fcf7 45%, #fff1e9 100%);
+    box-shadow: var(--shadow-soft);
 }
 
 .auth-brand::after {
@@ -315,7 +365,7 @@ button:focus-visible {
     inset: 0;
     background-image: repeating-linear-gradient(
         115deg,
-        rgba(255, 255, 255, 0.025) 0 1px,
+        rgba(22, 33, 26, 0.025) 0 1px,
         transparent 1px 16px
     );
     pointer-events: none;
@@ -328,7 +378,7 @@ button:focus-visible {
     width: 380px;
     height: 380px;
     border-radius: 50%;
-    background: radial-gradient(circle, rgba(255, 92, 61, 0.5), transparent 66%);
+    background: radial-gradient(circle, rgba(255, 107, 74, 0.22), transparent 66%);
     filter: blur(8px);
     pointer-events: none;
 }
@@ -366,8 +416,8 @@ button:focus-visible {
     padding: 22px 18px;
     border: 1px solid var(--line);
     border-radius: 20px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012));
-    box-shadow: var(--shadow);
+    background: var(--surface);
+    box-shadow: var(--shadow-soft);
 }
 
 .auth-head h2 {
@@ -383,7 +433,7 @@ button:focus-visible {
 }
 
 .auth-side-foot {
-    color: rgba(255, 255, 255, 0.28);
+    color: var(--muted-soft);
     font-size: 10px;
     text-align: center;
 }
@@ -395,9 +445,9 @@ button:focus-visible {
     gap: 10px;
     margin-top: 18px;
     padding: 13px 14px;
-    border: 1px dashed rgba(255, 179, 63, 0.35);
+    border: 1px dashed rgba(184, 58, 38, 0.28);
     border-radius: 13px;
-    background: rgba(255, 179, 63, 0.06);
+    background: var(--warm-soft);
 }
 
 .demo-copy {
@@ -407,7 +457,7 @@ button:focus-visible {
 }
 
 .demo-copy strong {
-    color: var(--brand-2);
+    color: var(--brand-ink);
 }
 
 .demo-copy span {
@@ -425,7 +475,7 @@ button:focus-visible {
     margin-top: 14px;
     padding: 11px 13px;
     border-radius: 11px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--surface-muted);
     color: var(--muted);
     font-size: 11px;
     line-height: 1.7;
@@ -439,7 +489,7 @@ button:focus-visible {
 }
 
 .switch-line a {
-    color: var(--brand-2);
+    color: var(--brand-ink);
     font-weight: 700;
 }
 
@@ -450,7 +500,7 @@ button:focus-visible {
     width: min(100%, var(--app-width));
     min-height: 100dvh;
     margin: 0 auto;
-    background: rgba(9, 11, 16, 0.55);
+    background: rgba(244, 251, 247, 0.72);
 }
 
 .app-frame.has-tab {
@@ -472,7 +522,7 @@ button:focus-visible {
     .app-frame {
         border-right: 1px solid var(--line);
         border-left: 1px solid var(--line);
-        box-shadow: 0 0 90px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 0 70px rgba(22, 33, 26, 0.08);
     }
 
     .auth-page {
@@ -490,7 +540,7 @@ button:focus-visible {
     padding: 0 13px;
     border: 1px solid var(--line);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--surface);
     color: var(--muted);
     font-size: 12px;
     white-space: nowrap;
@@ -498,9 +548,9 @@ button:focus-visible {
 }
 
 .chip.is-active {
-    border-color: rgba(255, 179, 63, 0.55);
+    border-color: rgba(184, 58, 38, 0.35);
     background: var(--brand-soft);
-    color: var(--brand-2);
+    color: var(--brand-ink);
 }
 
 .section-title {
@@ -530,6 +580,34 @@ button:focus-visible {
     font-weight: 800;
 }
 
+/* ---------- 媒体范围：视频/封面/Banner 内自动使用深色可读 token ---------- */
+
+.feed-slide-content,
+.feed-end,
+.banner-slide {
+    --text: var(--on-media);
+    --text-soft: rgba(255, 255, 255, 0.82);
+    --muted: var(--on-media-muted);
+    --muted-soft: rgba(255, 255, 255, 0.56);
+    --line: var(--media-line);
+    --line-strong: rgba(255, 255, 255, 0.28);
+    --surface: rgba(12, 16, 20, 0.60);
+    --surface-soft: rgba(255, 255, 255, 0.06);
+    --surface-muted: rgba(255, 255, 255, 0.10);
+    --surface-strong: rgba(255, 255, 255, 0.14);
+    --panel: rgba(12, 16, 20, 0.72);
+    --panel-strong: rgba(12, 16, 20, 0.86);
+    --brand-soft: rgba(255, 107, 74, 0.22);
+    --brand-ink: #ffc0ae;
+    --brand-2: var(--brand-2-bright);
+    --focus-ink: #ffffff;
+    --danger: #ff9a9a;
+    --danger-soft: rgba(255, 107, 107, 0.16);
+    --ok: #7fe3b4;
+    --ok-soft: rgba(71, 209, 140, 0.18);
+    --warning-ink: #ffd08a;
+}
+
 /* ---------- Toast ---------- */
 
 .toast-stack {
@@ -556,21 +634,22 @@ button:focus-visible {
     padding: 13px 16px;
     border: 1px solid var(--line);
     border-radius: 12px;
-    background: rgba(20, 26, 36, 0.96);
+    background: rgba(255, 255, 255, 0.96);
     color: var(--text);
-    box-shadow: var(--shadow);
+    box-shadow: var(--shadow-soft);
     font-size: 13px;
     text-align: left;
+    backdrop-filter: blur(14px);
 }
 
 .toast-success {
-    border-color: rgba(71, 209, 140, 0.4);
-    color: #b9f4d6;
+    border-color: rgba(31, 122, 86, 0.3);
+    color: var(--ok);
 }
 
 .toast-error {
-    border-color: rgba(255, 107, 107, 0.4);
-    color: #ffc2c2;
+    border-color: rgba(179, 54, 54, 0.3);
+    color: var(--danger);
 }
 
 .toast-enter-active,
@@ -599,8 +678,8 @@ button:focus-visible {
     padding: 32px 24px;
     border: 1px solid var(--line);
     border-radius: 20px;
-    background: var(--panel);
-    box-shadow: var(--shadow);
+    background: var(--surface);
+    box-shadow: var(--shadow-soft);
     text-align: center;
 }
 
@@ -703,7 +782,7 @@ button:focus-visible {
     }
 
     .brand-points span {
-        color: var(--brand-2);
+        color: var(--brand-ink);
         font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.08em;
@@ -714,7 +793,7 @@ button:focus-visible {
         z-index: 1;
         display: block;
         margin-top: 34px;
-        color: rgba(255, 255, 255, 0.28);
+        color: var(--muted-soft);
         font-size: 11px;
     }
 

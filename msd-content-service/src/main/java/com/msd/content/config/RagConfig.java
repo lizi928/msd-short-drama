@@ -1,5 +1,11 @@
 package com.msd.content.config;
 
+import com.msd.content.ai.AiExperimentService;
+import com.msd.content.ai.AiInputGuard;
+import com.msd.content.ai.AiMetrics;
+import com.msd.content.ai.AiOutputGuard;
+import com.msd.content.ai.AiTokenBudgetService;
+import com.msd.content.ai.RagResponseCache;
 import com.msd.content.rag.DashScopeRerankPostProcessor;
 import com.msd.content.rag.ElasticsearchBm25Store;
 import com.msd.content.rag.HybridRetriever;
@@ -201,8 +207,16 @@ public class RagConfig {
     public RagRecommendationService ragRecommendationService(
             @Qualifier("ragChatClient") ChatClient ragChatClient,
             RagProperties properties,
-            UserPreferenceService preferenceService) {
-        return new RagRecommendationService(ragChatClient, properties, preferenceService);
+            UserPreferenceService preferenceService,
+            AiInputGuard inputGuard,
+            AiOutputGuard outputGuard,
+            AiMetrics metrics,
+            AiExperimentService experimentService,
+            AiTokenBudgetService budgetService,
+            RagResponseCache responseCache) {
+        return new RagRecommendationService(ragChatClient, properties, preferenceService,
+                inputGuard, outputGuard, metrics, experimentService, budgetService,
+                responseCache);
     }
 
     /**

@@ -70,7 +70,8 @@ public class DramaDocumentBuilder {
      */
     public Document buildEpisode(DramaRagExportDTO drama, EpisodeRagExportDTO episode) {
         return buildEpisode(drama.id(), drama.title(),
-                episode.id(), episode.episodeNo(), episode.title(), episode.summary());
+                episode.id(), episode.episodeNo(), episode.title(), episode.summary(),
+                episode.pricePoints());
     }
 
     /**
@@ -78,11 +79,20 @@ public class DramaDocumentBuilder {
      */
     public Document buildEpisode(Long dramaId, String dramaTitle, Long episodeId, Integer episodeNo,
                                  String episodeTitle, String summary) {
+        return buildEpisode(dramaId, dramaTitle, episodeId, episodeNo,
+                episodeTitle, summary, 0);
+    }
+
+    /**
+     * 按字段构建分集文档，并把价格写入 metadata 供前情权限过滤。
+     */
+    public Document buildEpisode(Long dramaId, String dramaTitle, Long episodeId, Integer episodeNo,
+                                 String episodeTitle, String summary, Integer pricePoints) {
         // 1. 文档 ID 固定为 episode-{id}，和短剧文档区分开
         String documentId = "episode-" + episodeId;
         String cleanSummary = nullToEmpty(summary);
 
-        // 2. metadata 同时保留短剧归属、集数和摘要，检索时用于过滤与展示
+        // 2. metadata 同时保留短剧归属、集数、摘要和价格，检索时用于过滤与展示
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(RagMetadata.DOC_TYPE, RagMetadata.DOC_TYPE_EPISODE);
         metadata.put(RagMetadata.DRAMA_ID, dramaId);
@@ -91,6 +101,8 @@ public class DramaDocumentBuilder {
         metadata.put(RagMetadata.EPISODE_NO, episodeNo == null ? 0 : episodeNo);
         metadata.put(RagMetadata.EPISODE_TITLE, nullToEmpty(episodeTitle));
         metadata.put(RagMetadata.SUMMARY, cleanSummary);
+        metadata.put(RagMetadata.PRICE_POINTS,
+                pricePoints == null ? 0 : pricePoints);
         metadata.put(RagMetadata.SNIPPET, truncate(cleanSummary, SNIPPET_CHARS));
 
         // 3. 正文用于 embedding，剧名和摘要提供语义匹配依据

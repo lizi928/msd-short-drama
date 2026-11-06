@@ -40,11 +40,13 @@ public class DramaReviewAuditController {
     @PostMapping("/pending")
     public Mono<Result<DramaReviewAuditBatchResult>> pending(
             @RequestParam(value = "limit", defaultValue = "5") Integer limit,
+            @RequestParam(value = "includeFailed", defaultValue = "false") boolean includeFailed,
             @RequestHeader(value = CommonConstants.HEADER_USER_ROLE, required = false) String role) {
         // 1. 经网关调用时必须是管理员；直连 8107 的运维调用可以不带角色
         RoleGuard.requireAdminIfPresent(role);
         // 2. Feign 和模型调用都在 boundedElastic 执行
-        return Mono.fromCallable(() -> Result.ok(auditService.auditPending(limit)))
+        return Mono.fromCallable(() -> Result.ok(
+                        auditService.auditPending(limit, includeFailed)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 

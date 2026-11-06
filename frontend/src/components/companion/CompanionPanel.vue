@@ -21,10 +21,14 @@ defineProps({
     episode: {
         type: Object,
         default: null
+    },
+    positionMs: {
+        type: [String, Number],
+        default: 0
     }
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'seek'])
 </script>
 
 <template>
@@ -37,6 +41,8 @@ const emit = defineEmits(['update:modelValue'])
             :drama-id="dramaId"
             :drama-title="dramaTitle"
             :episode="episode"
+            :position-ms="positionMs"
+            @seek="emit('seek', $event)"
         />
     </AppModal>
 </template>

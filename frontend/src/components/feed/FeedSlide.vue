@@ -70,6 +70,10 @@ const props = defineProps({
     initialPlayback: {
         type: Object,
         default: null
+    },
+    seekRequest: {
+        type: Object,
+        default: null
     }
 })
 
@@ -77,12 +81,15 @@ const emit = defineEmits([
     'like',
     'favorite',
     'comments',
+    'recap',
+    'finished',
     'companion',
     'info',
     'episodes',
     'unlocked',
     'retry-points',
-    'recharge'
+    'recharge',
+    'progress'
 ])
 
 const toast = useToastStore()
@@ -171,12 +178,50 @@ let lastReportPosition = 0
 function applyPlayback(info) {
     playback.value = info
     player.reset(startPosition())
+    applySeekRequest()
     lastReportPosition = player.positionMs.value
     if (props.active && !props.suspended && (info.free || info.unlocked) && !player.finished.value) {
         startTimer()
         player.play()
     }
 }
+
+/**
+ * 应用外部字幕引用跳转；剧集不匹配时忽略。
+ */
+function applySeekRequest() {
+    const request = props.seekRequest
+    if (!request || !props.episode) {
+        return
+    }
+    if (Number(request.episodeId) !== Number(props.episode.episodeId)) {
+        return
+    }
+    player.seek(Math.max(0, Number(request.positionMs) || 0))
+}
+
+/**
+ * 播放进度变化时每秒上报一次，供伴看字幕防剧透过滤。
+ */
+let lastProgressEmit = 0
+watch(() => player.positionMs.value, (value) => {
+    if (!props.active) {
+        return
+    }
+    const now = Date.now()
+    if (now - lastProgressEmit < 1000) {
+        return
+    }
+    lastProgressEmit = now
+    emit('progress', {
+        episodeId: Number(props.episode.episodeId),
+        positionMs: Math.max(0, Math.round(Number(value) || 0))
+    })
+})
+
+watch(() => props.seekRequest, () => {
+    applySeekRequest()
+}, { immediate: true })
 
 /**
  * 激活后才加载播放信息，减少滑动中的无效请求。
@@ -285,6 +330,7 @@ watch(() => player.finished.value, (finished) => {
     if (finished) {
         lastReportPosition = durationMs.value
         reporter.finish()
+        emit('finished', props.episode)
     }
 })
 
@@ -482,6 +528,15 @@ onBeforeUnmount(() => {
                     <path d="M4 5h16v11H9l-5 4z"/>
                 </svg>
                 <span>{{ formatCount(commentCount) }}</span>
+            </button>
+
+            <button class="rail-btn" type="button" aria-label="前情提要" @click="emit('recap')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/>
+                    <path d="M8 8h7M8 12h7"/>
+                </svg>
+                <span>看点</span>
             </button>
 
             <button class="rail-btn" type="button" aria-label="AI 伴看" @click="emit('companion')">

@@ -62,6 +62,7 @@ logs/
 derby.log
 *.iml
 .idea/
+eval/report*.json
 
 ### AgentScope runtime ###
 .agentscope/workspace/agents/

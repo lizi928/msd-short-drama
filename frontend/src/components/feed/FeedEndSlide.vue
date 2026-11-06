@@ -1,5 +1,6 @@
 <script setup>
 import GradientCover from '../GradientCover.vue'
+import RelatedDramas from '../RelatedDramas.vue'
 
 defineProps({
     drama: {
@@ -34,6 +35,9 @@ defineEmits(['home', 'replay'])
                 <button class="btn btn-ghost btn-small" type="button" @click="$emit('home')">
                     返回首页
                 </button>
+            </div>
+            <div class="end-related">
+                <RelatedDramas :drama-id="drama.id" :limit="4"/>
             </div>
         </div>
     </div>
@@ -71,6 +75,7 @@ defineEmits(['home', 'replay'])
     align-content: center;
     justify-items: center;
     gap: 10px;
+    overflow-y: auto;
     padding: 24px;
     text-align: center;
 }
@@ -90,5 +95,11 @@ defineEmits(['home', 'replay'])
     display: flex;
     gap: 8px;
     margin-top: 12px;
+}
+
+.end-related {
+    width: min(100%, 420px);
+    margin-top: 14px;
+    text-align: left;
 }
 </style>

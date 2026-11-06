@@ -4,6 +4,8 @@ import com.msd.common.auth.RoleGuard;
 import com.msd.common.constant.CommonConstants;
 import com.msd.common.result.Result;
 import com.msd.content.config.RagProperties;
+import com.msd.content.dto.AiStreamDone;
+import com.msd.content.dto.AiStreamError;
 import com.msd.content.dto.RagRecommendRequest;
 import com.msd.content.dto.RagRecommendResponse;
 import com.msd.content.dto.RagStatus;
@@ -16,16 +18,20 @@ import com.msd.content.support.LazyMilvusStoreProvider;
 import com.msd.content.support.RagIndexState;
 import jakarta.validation.Valid;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -92,6 +98,29 @@ public class RagController {
     }
 
     /**
+     * 流式推荐，事件顺序为 meta → delta* → sources → done。
+     */
+    @PostMapping(value = "/recommend/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<Object>> recommendStream(
+            @Valid @RequestBody RagRecommendRequest request,
+            @RequestHeader(value = CommonConstants.HEADER_USER_ID, required = false) String userIdHeader) {
+        // 1. 解析可选用户 ID；未登录或非法时不加载画像
+        Long userId = parseUserId(userIdHeader);
+        long timeoutMs = Math.max(properties.getTotalTimeoutMs(), 1);
+        // 2. 画像读取会阻塞，放到弹性线程池后再订阅模型流
+        return Mono.fromCallable(() -> recommendationService.stream(request, userId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapMany(flux -> flux)
+                // 3. 整体超时追加 error/done 帧，前端可回退到普通 JSON 接口
+                .timeout(Duration.ofMillis(timeoutMs))
+                .onErrorResume(TimeoutException.class, e -> Flux.just(
+                        event("error", new AiStreamError("timeout",
+                                "这次找剧花的时间有点久，可以重试")),
+                        event("done", new AiStreamDone(true, List.of("timeout"),
+                                timeoutMs, false))));
+    }
+
+    /**
      * 全量重建向量和 BM25 索引。
      *
      * @param request 可选请求体，allowEmptyCatalog 控制目录为空时是否继续
@@ -138,6 +167,13 @@ public class RagController {
         } catch (NumberFormatException ex) {
             return null;
         }
+    }
+
+    /**
+     * 构造 SSE 事件。
+     */
+    private static ServerSentEvent<Object> event(String name, Object data) {
+        return ServerSentEvent.<Object>builder(data).event(name).build();
     }
 
     /**

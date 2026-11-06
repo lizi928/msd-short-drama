@@ -163,12 +163,12 @@ async function toggleLike() {
 
 .time {
     margin-left: auto;
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--muted-soft);
     font-size: 10px;
 }
 
 .comment-content {
-    color: #c9d2e1;
+    color: var(--text-soft);
     font-size: 13px;
     line-height: 1.75;
     white-space: pre-wrap;
@@ -202,7 +202,7 @@ async function toggleLike() {
 }
 
 .link-btn.is-danger {
-    color: rgba(255, 107, 107, 0.72);
+    color: var(--danger);
 }
 
 .link-btn:disabled {

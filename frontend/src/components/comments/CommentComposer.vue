@@ -97,7 +97,7 @@ defineExpose({ clear, focus, set })
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--surface-soft);
 }
 
 .reply-chip {
@@ -121,9 +121,9 @@ defineExpose({ clear, focus, set })
     width: 100%;
     min-height: 66px;
     padding: 10px 11px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-strong);
     border-radius: 10px;
-    background: rgba(0, 0, 0, 0.26);
+    background: var(--surface);
     color: var(--text);
     font-size: 16px;
     line-height: 1.6;
@@ -131,13 +131,13 @@ defineExpose({ clear, focus, set })
 }
 
 .composer-input::placeholder {
-    color: rgba(255, 255, 255, 0.28);
+    color: var(--muted-soft);
 }
 
 .composer-input:focus {
     outline: none;
-    border-color: rgba(255, 179, 63, 0.6);
-    box-shadow: 0 0 0 3px rgba(255, 179, 63, 0.1);
+    border-color: rgba(184, 58, 38, 0.5);
+    box-shadow: 0 0 0 3px rgba(184, 58, 38, 0.1);
 }
 
 .composer-foot {
@@ -148,7 +148,7 @@ defineExpose({ clear, focus, set })
 }
 
 .counter {
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--muted-soft);
     font-family: "Cascadia Code", Consolas, monospace;
     font-size: 10px;
 }

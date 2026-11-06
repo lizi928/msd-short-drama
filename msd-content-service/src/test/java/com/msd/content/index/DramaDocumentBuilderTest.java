@@ -72,6 +72,21 @@ class DramaDocumentBuilderTest {
     }
 
     /**
+     * 分集价格写入 metadata，供伴看前情过滤付费集。
+     */
+    @Test
+    void writesPricePointsToEpisodeMetadata() {
+        DramaDocumentBuilder builder = new DramaDocumentBuilder(new RagProperties());
+        EpisodeRagExportDTO episode = new EpisodeRagExportDTO(
+                6401L, 1, "第1集 雨夜尸案", "摘要", 30);
+
+        Document document = builder.buildEpisode(drama(), episode);
+
+        assertThat(document.getMetadata())
+                .containsEntry(RagMetadata.PRICE_POINTS, 30);
+    }
+
+    /**
      * 分集标题没有“第N集”前缀时自动补全，已有前缀时不重复。
      */
     @Test

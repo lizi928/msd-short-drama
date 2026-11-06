@@ -54,9 +54,10 @@ public class InternalDramaReviewController {
      */
     @GetMapping("/pending")
     public Result<List<DramaReviewCandidateDTO>> pending(
-            @RequestParam(value = "limit", defaultValue = "20") Integer limit) {
-        // 1. 只返回待审且 AI 尚未通过的短剧
-        return Result.ok(reviewService.listAiReviewCandidates(limit));
+            @RequestParam(value = "limit", defaultValue = "20") Integer limit,
+            @RequestParam(value = "includeFailed", defaultValue = "false") boolean includeFailed) {
+        // 1. 只返回待审且 AI 尚未通过的短剧；显式重试时包含失败项
+        return Result.ok(reviewService.listAiReviewCandidates(limit, includeFailed));
     }
 
     /**

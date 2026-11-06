@@ -54,10 +54,10 @@ spring:
           msd-drama:
             connect-timeout: 2000
             read-timeout: 5000
-          # 伴看摘要可能触发轻量模型生成，读超时放宽到 15 秒
+          # 伴看/找剧共用 content 客户端；找剧 RAG 生成可能较慢，读超时放宽到 60 秒
           msd-content-service:
             connect-timeout: 2000
-            read-timeout: 15000
+            read-timeout: 60000
 
 management:
   endpoints:

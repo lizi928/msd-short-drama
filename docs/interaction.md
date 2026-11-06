@@ -30,12 +30,17 @@
 | DELETE | `/history` | 清空全部历史 |
 | GET | `/stats` | 个人中心互动计数（单条 SQL 聚合） |
 | GET | `/events/{eventId}` | 异步计数事件状态，校验事件归属 |
+| POST | `/api/interaction/internal/recommendations/events` | 推荐点击/播放/完播/不感兴趣归因 |
+| GET | `/api/interaction/internal/ai/comments/summary` | 评论课代表 |
+| GET | `/api/interaction/internal/admin/comments?aiReviewStatus=` | 管理端评论列表，支持 AI 状态筛选 |
+| POST | `/api/interaction/internal/admin/comments/{id}/ai-audit` | 管理端重跑评论 AI 预审 |
 
 服务间只读接口（不经过网关）：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/internal-source/users/{userId}/behavior` | 推荐画像用行为权重：收藏 3、点赞 2、看完 1.5、未看完 1；返回最近互动和收藏剧 ID |
+| GET | `/internal-source/users/{userId}/behavior` | 推荐画像用行为权重：收藏 3、点赞 2、看完 1.5、未看完 1；返回最近互动、收藏、继续观看、共同观看和负反馈剧 ID |
+| POST | `/internal-source/recommendations/exposures` | content 批量写入推荐曝光，幂等 |
 
 ## 2. 评论
 
@@ -91,6 +96,17 @@
 - 只允许点赞 `status=1` 的评论；已删除/隐藏评论返回 404。
 - 点赞前先校验评论存在且可见，避免异步化后产生孤儿点赞。
 - `t_comment.like_count` 由 `msd-interaction-counter-v1` 消费 LIKE/UNLIKE 事件异步更新；评论列表返回当前用户 `liked`，前端先乐观更新。
+
+### 2.5 评论 AI 预审
+
+- 评论创建事务提交后发布 `CommentCreatedEvent`，`CommentAiReviewService` 异步调用 content `POST /internal/ai/audit/structured`，`scene=comment`。
+- AI 只写 `ai_review_status`、`ai_review_result`、`ai_review_time`：
+  - `0` 未审核、`1` 审核中、`2` 通过、`3` 风险、`4` 失败。
+- **绝不修改人工 `status`**；评论默认 `status=1` 可见，AI 风险只在管理端标记和排序。
+- 降级写 `4`，并在 JSON 中保留 `degradedFlags`；不自动隐藏、不自动放行。
+- 管理端列表可按 `aiReviewStatus` 筛选，并支持 `POST /internal/admin/comments/{id}/ai-audit` 重跑。
+- 预审结果 JSON 结构：`{"scene":"comment","verdict":{"is_violation":false,...},"degraded":false,"degradedFlags":[],"elapsedMs":...}`。
+- 建表/加列脚本：`deploy/mysql/repair/20261106_p1_comment_recommendation.sql`。
 
 ## 3. 收藏、点赞短剧与观看历史
 
@@ -267,8 +283,106 @@ mysql -umsd -p -h127.0.0.1 DL < scripts/check-interaction-consistency.sql
 
 ## 8. 不在本切片
 
-- 评论 AI 预审、敏感词、评论编辑、评论恢复、评论点赞列表；管理员隐藏/删除见 [moderation.md](moderation.md)。
+- 评论 AI 预审已实现为异步建议；敏感词、评论编辑、评论恢复、评论点赞列表仍不在本切片；管理员隐藏/删除见 [moderation.md](moderation.md)。
 - 按短剧聚合的「继续观看」已接入 `GET /history/continue`，首页显示最近一条。
 - 头像上传/裁剪；只接受 URL 字符串。
 - 点赞/收藏写入的短剧/剧集存在性校验（列表补齐时自然隐藏）。
 - Redis 缓存、通知、消息中心。
+
+## 9. AI 回答反馈
+
+经网关访问，只允许登录用户：
+
+```http
+POST /api/interaction/internal/ai/feedback
+```
+
+```json
+{
+  "scene": "RAG_SEARCH",
+  "requestId": "4d1f...",
+  "rating": 1,
+  "reason": "",
+  "comment": "",
+  "targetId": 5001,
+  "sessionId": ""
+}
+```
+
+```json
+{"id": 18, "duplicate": false}
+```
+
+- `scene`：`RAG_SEARCH`、`COMPANION`、`AUDIT`、`RECOMMEND`。
+- `rating`：`1` 有用，`-1` 没用；0 或其他值返回 400。
+- `reason` 可选：`INACCURATE`、`IRRELEVANT`、`SPOILER`、`UNSAFE`、`OTHER`。
+- `comment` 最多 500 字；不存原始 prompt 或完整对话。
+- `UNIQUE KEY (user_id, scene, request_id)` 保证幂等；重复提交返回已有记录 `duplicate=true`，不重复计数。
+- 新增反馈时累加 `ai_feedback_total{scene,rating}`，`/actuator/prometheus` 可采集。
+- 匿名 AI 搜索不展示反馈按钮；伴看、审核详情和已登录找剧展示。
+- 建表脚本：`deploy/mysql/repair/20261106_ai_feedback.sql`。
+
+## 10. 推荐归因
+
+### 10.1 曝光
+
+content 返回首页推荐后调用（服务间直连）：
+
+```http
+POST /internal-source/recommendations/exposures
+```
+
+```json
+{
+  "userId": 1003,
+  "requestId": "req-1",
+  "scene": "HOME_FEED",
+  "algorithm": "v2",
+  "experimentId": "for-you-v2",
+  "variant": "A",
+  "items": [{"dramaId": 5001, "position": 1, "reason": "因为你喜欢甜宠"}]
+}
+```
+
+- 写入 `t_recommendation_exposure`，按 `(request_id, drama_id)` 幂等。
+- content 端失败只记录 debug 日志，不影响推荐返回。
+
+### 10.2 行为事件
+
+```http
+POST /api/interaction/internal/recommendations/events
+Authorization: Bearer <token>
+```
+
+```json
+{"requestId":"req-1","dramaId":5001,"eventType":1,"position":1}
+```
+
+- `eventType`：1 点击、2 播放、3 完播、4 不感兴趣。
+- 按 `(user_id, request_id, drama_id, event_type)` 幂等；重复上报返回成功。
+- 前端首页卡片点击/不感兴趣、Feed 播放/完播自动上报。
+- 负反馈写入后，`UserBehaviorService` 会把该短剧加入排除列表；前端同时清理 content 个性化缓存。
+
+## 11. 评论课代表
+
+```http
+GET /api/interaction/internal/ai/comments/summary?dramaId=5001&episodeId=6005
+```
+
+```json
+{
+  "summary": "大家普遍觉得节奏紧凑，男女主互动自然；也有人认为中段略拖。",
+  "sentiment": "mixed",
+  "representatives": [
+    {"commentId": 9001, "content": "节奏挺快的", "likeCount": 12}
+  ],
+  "degraded": false,
+  "degradedFlags": [],
+  "elapsedMs": 1234
+}
+```
+
+- 只取可见根评论，按点赞数倒序最多 50 条；包含“结局/凶手/剧透/加微信”等词的评论不进入摘要。
+- interaction 调 content `POST /internal/ai/comment-summary`，独立 15 秒读超时。
+- 结果 Caffeine 缓存 10 分钟；下游失败返回 `degraded=true`，前端隐藏课代表卡片。
+- 摘要只做观点聚合，不作为剧情事实；代表评论必须来自输入 ID，前端仅展示原文和赞数。

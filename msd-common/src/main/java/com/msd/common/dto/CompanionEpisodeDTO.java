@@ -13,6 +13,7 @@ package com.msd.common.dto;
  * @param summary          分集摘要，没有摘要时为空字符串
  * @param summaryStatus    摘要状态：0 缺失，1 生成中，2 可用，3 失败
  * @param dramaDescription 短剧简介，已截断，仅用于生成摘要提示
+ * @param pricePoints      解锁所需积分，0 表示免费
  */
 public record CompanionEpisodeDTO(
         Long episodeId,
@@ -22,6 +23,17 @@ public record CompanionEpisodeDTO(
         String episodeTitle,
         String summary,
         Integer summaryStatus,
-        String dramaDescription
+        String dramaDescription,
+        Integer pricePoints
 ) {
+
+    /**
+     * 兼容旧调用方，默认按免费集处理。
+     */
+    public CompanionEpisodeDTO(Long episodeId, Long dramaId, String dramaTitle,
+                               Integer episodeNo, String episodeTitle, String summary,
+                               Integer summaryStatus, String dramaDescription) {
+        this(episodeId, dramaId, dramaTitle, episodeNo, episodeTitle, summary,
+                summaryStatus, dramaDescription, 0);
+    }
 }

@@ -123,6 +123,84 @@ public class HybridRetriever implements DocumentRetriever {
     }
 
     /**
+     * 检索字幕片段，限定短剧和最大集数；两路并行后 RRF 融合。
+     */
+    public List<Document> retrieveTranscripts(Query query, Long dramaId, Integer maxEpisodeNo) {
+        if (query == null || query.text() == null || query.text().isBlank()
+                || dramaId == null || maxEpisodeNo == null || maxEpisodeNo <= 0) {
+            return List.of();
+        }
+        String text = query.text();
+        RagTrace trace = RagTrace.from(query);
+        CompletableFuture<BranchResult> vectorFuture = properties.getVector().isEnabled()
+                ? CompletableFuture.supplyAsync(() -> transcriptVectorBranch(
+                        text, dramaId, maxEpisodeNo), retrievalExecutor)
+                : CompletableFuture.completedFuture(BranchResult.empty());
+        CompletableFuture<BranchResult> bm25Future = properties.getBm25().isEnabled()
+                ? CompletableFuture.supplyAsync(() -> transcriptBm25Branch(
+                        text, dramaId, maxEpisodeNo), retrievalExecutor)
+                : CompletableFuture.completedFuture(BranchResult.empty());
+
+        BranchResult vector = await(vectorFuture, properties.getVector().getTimeoutMs(), "vector");
+        BranchResult bm25 = await(bm25Future, properties.getBm25().getTimeoutMs(), "bm25");
+        if (trace != null) {
+            trace.addVectorHits(vector.documents().size());
+            trace.addVectorMillis(vector.millis());
+            trace.addBm25Hits(bm25.documents().size());
+            trace.addBm25Millis(bm25.millis());
+            if (vector.error() != null) {
+                trace.markDegraded("vector");
+            }
+            if (bm25.error() != null) {
+                trace.markDegraded("bm25");
+            }
+        }
+        List<Document> merged = rrfMerger.merge(
+                vector.documents(),
+                bm25.documents(),
+                properties.getHybrid().getRrfK(),
+                retrievalTopK(properties.getHybrid().getTopK()));
+        if (trace != null) {
+            trace.addRrfHits(merged.size());
+        }
+        log.info("transcript retrieval: query='{}', dramaId={}, maxEpisodeNo={}, "
+                        + "vectorHits={}, bm25Hits={}, rrfHits={}",
+                preview(text), dramaId, maxEpisodeNo, vector.documents().size(),
+                bm25.documents().size(), merged.size());
+        return merged;
+    }
+
+    /**
+     * 字幕向量检索分支。
+     */
+    private BranchResult transcriptVectorBranch(String text, Long dramaId, Integer maxEpisodeNo) {
+        long startedAt = System.currentTimeMillis();
+        try {
+            return new BranchResult(milvusProvider.searchTranscripts(
+                    text, dramaId, maxEpisodeNo, retrievalTopK(properties.getVector().getTopK())),
+                    System.currentTimeMillis() - startedAt, null);
+        } catch (Exception e) {
+            return new BranchResult(List.of(), System.currentTimeMillis() - startedAt,
+                    rootMessage(e));
+        }
+    }
+
+    /**
+     * 字幕 BM25 检索分支。
+     */
+    private BranchResult transcriptBm25Branch(String text, Long dramaId, Integer maxEpisodeNo) {
+        long startedAt = System.currentTimeMillis();
+        try {
+            return new BranchResult(bm25Store.searchTranscripts(
+                    text, dramaId, maxEpisodeNo, retrievalTopK(properties.getBm25().getTopK())),
+                    System.currentTimeMillis() - startedAt, null);
+        } catch (Exception e) {
+            return new BranchResult(List.of(), System.currentTimeMillis() - startedAt,
+                    rootMessage(e));
+        }
+    }
+
+    /**
      * 向量检索分支，按范围选择短剧或分集检索，异常转成降级结果。
      */
     private BranchResult vectorBranch(String text, RetrievalScope scope) {

@@ -48,6 +48,17 @@ export function auditDrama(dramaId) {
 }
 
 /**
+ * 批量审核待审短剧；includeFailed=true 时同时重试 AI 失败项。
+ */
+export function auditPendingDramas({ limit = 5, includeFailed = false } = {}) {
+    return request('/api/content/internal/ai/audit/dramas/pending', {
+        method: 'POST',
+        query: { limit, includeFailed },
+        timeoutMs: 180000
+    })
+}
+
+/**
  * 触发 RAG 全量重建索引。
  */
 export function reindexRag() {
@@ -60,9 +71,18 @@ export function reindexRag() {
 /**
  * 管理端分页查询评论。
  */
-export function fetchAdminComments({ status, dramaId, pageNo, pageSize }) {
+export function fetchAdminComments({ status, dramaId, aiReviewStatus, pageNo, pageSize }) {
     return request('/api/interaction/internal/admin/comments', {
-        query: { status, dramaId, pageNo, pageSize }
+        query: { status, dramaId, aiReviewStatus, pageNo, pageSize }
+    })
+}
+
+/**
+ * 重跑单条评论 AI 预审；只更新 AI 列。
+ */
+export function retryAdminCommentAiAudit(commentId) {
+    return request(`/api/interaction/internal/admin/comments/${commentId}/ai-audit`, {
+        method: 'POST'
     })
 }
 

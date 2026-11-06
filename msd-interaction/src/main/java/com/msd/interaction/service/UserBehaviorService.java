@@ -29,6 +29,12 @@ public class UserBehaviorService {
     private static final int RECENT_LIMIT = 20;
     /** 最近收藏短剧返回条数。 */
     private static final int FAVORITE_LIMIT = 20;
+    /** 继续观看返回条数。 */
+    private static final int CONTINUE_LIMIT = 10;
+    /** 共同观看召回条数。 */
+    private static final int CO_OCCURRENCE_LIMIT = 20;
+    /** 负反馈返回条数。 */
+    private static final int DISLIKE_LIMIT = 50;
 
     // 行为聚合 Mapper
     private final UserBehaviorMapper behaviorMapper;
@@ -82,14 +88,39 @@ public class UserBehaviorService {
                     .limit(RECENT_LIMIT)
                     .toList();
 
-            // 5. 收藏 ID 单独查询，供推荐排除已收藏内容
+            // 5. 收藏、继续观看、共同观看和负反馈分别查询
             List<Long> favorites = behaviorMapper.selectFavoriteDramaIds(userId, FAVORITE_LIMIT);
+            List<Long> continueIds = behaviorMapper.selectContinueDramaIds(userId, CONTINUE_LIMIT);
+            List<UserBehaviorRow> coOccurrenceRows = behaviorMapper.selectCoOccurrenceDramas(
+                    userId, since, CO_OCCURRENCE_LIMIT);
+            // 迁移脚本未执行时推荐事件表可能不存在，负反馈缺失不能拖垮整个画像
+            List<Long> disliked;
+            try {
+                disliked = behaviorMapper.selectDislikedDramaIds(userId, DISLIKE_LIMIT);
+            } catch (Exception ex) {
+                log.debug("load disliked dramas failed: userId={}", userId, ex);
+                disliked = List.of();
+            }
+
+            // 6. 转换行为权重和共现得分
             List<UserBehaviorDTO.DramaWeight> weightList = new ArrayList<>();
             weights.forEach((dramaId, weight) ->
                     weightList.add(new UserBehaviorDTO.DramaWeight(dramaId, weight)));
+            List<UserBehaviorDTO.DramaWeight> coOccurrence = new ArrayList<>();
+            if (coOccurrenceRows != null) {
+                for (UserBehaviorRow row : coOccurrenceRows) {
+                    if (row != null && row.getDramaId() != null && row.getDramaId() > 0) {
+                        coOccurrence.add(new UserBehaviorDTO.DramaWeight(
+                                row.getDramaId(), row.getWeight() == null ? 0 : row.getWeight()));
+                    }
+                }
+            }
 
             return new UserBehaviorDTO(userId, weightList, recent,
-                    favorites == null ? List.of() : List.copyOf(favorites));
+                    favorites == null ? List.of() : List.copyOf(favorites),
+                    continueIds == null ? List.of() : List.copyOf(continueIds),
+                    List.copyOf(coOccurrence),
+                    disliked == null ? List.of() : List.copyOf(disliked));
         } catch (Exception ex) {
             log.warn("load user behavior failed: userId={}", userId, ex);
             return UserBehaviorDTO.empty(userId);

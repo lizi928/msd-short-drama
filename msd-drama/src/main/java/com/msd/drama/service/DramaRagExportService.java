@@ -3,6 +3,7 @@ package com.msd.drama.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.msd.common.dto.DramaRagExportDTO;
 import com.msd.common.dto.EpisodeRagExportDTO;
+import com.msd.common.dto.RecapEpisodeDTO;
 import com.msd.common.result.PageResult;
 import com.msd.drama.dto.DramaEpisodeTitleRow;
 import com.msd.drama.dto.DramaTagNameRow;
@@ -17,13 +18,16 @@ import org.springframework.stereotype.Service;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * RAG 索引目录导出。
+ * RAG 索引目录、相似推荐和前情提要导出。
  *
  * <p>批量查询标签、剧集标题和分类，避免按短剧逐条查询造成 N+1。</p>
  */
@@ -32,6 +36,10 @@ public class DramaRagExportService {
 
     /** 导出单页最大条数 */
     private static final int MAX_PAGE_SIZE = 500;
+    /** 相似推荐最大条数 */
+    private static final int MAX_RELATED_SIZE = 12;
+    /** 相似推荐候选池倍数 */
+    private static final int RELATED_CANDIDATE_FACTOR = 4;
 
     // 短剧 Mapper
     private final DramaMapper dramaMapper;
@@ -76,21 +84,111 @@ public class DramaRagExportService {
             return PageResult.of(safePage, safeSize, total, List.of());
         }
 
-        // 4. 一次查询分类名，按分类 ID 建映射
-        Map<Long, String> categoryNames = categoryMapper.selectList(new LambdaQueryWrapper<DramaCategory>())
+        // 4. 批量补齐分类、标签和分集明细
+        return PageResult.of(safePage, safeSize, total, toDtos(dramas));
+    }
+
+    /**
+     * 查询单部已上架短剧的导出数据；不存在时返回 null。
+     */
+    public DramaRagExportDTO exportOne(Long dramaId) {
+        // 1. 只允许已上架短剧
+        if (dramaId == null || dramaId <= 0) {
+            return null;
+        }
+        Drama drama = dramaMapper.selectPublicById(dramaId);
+        if (drama == null) {
+            return null;
+        }
+        // 2. 复用批量转换，保证字段和全量导出一致
+        return toDtos(List.of(drama)).get(0);
+    }
+
+    /**
+     * 相似短剧规则兜底：同分类、共同标签优先，再按热度排序。
+     */
+    public List<DramaRagExportDTO> relatedFallback(Long dramaId, int limit) {
+        // 1. 读取源短剧和它的标签，源短剧不可见时没有兜底意义
+        if (dramaId == null || dramaId <= 0) {
+            return List.of();
+        }
+        Drama source = dramaMapper.selectPublicById(dramaId);
+        if (source == null) {
+            return List.of();
+        }
+        int safeLimit = Math.max(1, Math.min(limit, MAX_RELATED_SIZE));
+        List<String> sourceTags = loadTagNames(List.of(dramaId))
+                .getOrDefault(dramaId, List.of());
+
+        // 2. 取一个更大的热度候选池，再按分类和标签重排
+        List<Drama> candidates = dramaMapper.selectRelatedCandidates(
+                dramaId, Math.max(safeLimit * RELATED_CANDIDATE_FACTOR, safeLimit));
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+        List<DramaRagExportDTO> dtos = toDtos(candidates);
+        Map<Long, Integer> scores = new LinkedHashMap<>();
+        for (DramaRagExportDTO candidate : dtos) {
+            int score = 0;
+            if (source.getCategoryId() != null
+                    && source.getCategoryId().equals(candidate.categoryId())) {
+                score += 2;
+            }
+            score += commonTagCount(sourceTags, candidate.tags());
+            scores.put(candidate.id(), score);
+        }
+
+        // 3. 得分降序，得分相同时保持候选池的热度顺序
+        List<DramaRagExportDTO> ordered = new ArrayList<>(dtos);
+        ordered.sort(Comparator
+                .comparingInt((DramaRagExportDTO item) -> scores.getOrDefault(item.id(), 0))
+                .reversed());
+        return ordered.stream().limit(safeLimit).toList();
+    }
+
+    /**
+     * 查询当前集及之前的在线分集摘要，供前情提要使用。
+     */
+    public List<RecapEpisodeDTO> recap(Long dramaId, Integer episodeNo) {
+        // 1. 参数非法时没有可返回的分集
+        if (dramaId == null || dramaId <= 0 || episodeNo == null || episodeNo <= 0) {
+            return List.of();
+        }
+        // 2. 只返回已上架短剧下、在线且不晚于当前集的分集
+        return episodeMapper.selectRecapEpisodes(dramaId, episodeNo).stream()
+                .map(row -> new RecapEpisodeDTO(
+                        row.getEpisodeId(),
+                        row.getEpisodeNo(),
+                        row.getTitle(),
+                        row.getSummary(),
+                        row.getPricePoints(),
+                        row.getSummaryStatus()))
+                .toList();
+    }
+
+    /**
+     * 把短剧实体批量转换为导出 DTO，统一补齐分类、标签和分集。
+     */
+    private List<DramaRagExportDTO> toDtos(List<Drama> dramas) {
+        if (dramas == null || dramas.isEmpty()) {
+            return List.of();
+        }
+        // 1. 一次查询分类名，按分类 ID 建映射
+        Map<Long, String> categoryNames = categoryMapper.selectList(
+                        new LambdaQueryWrapper<DramaCategory>())
                 .stream()
                 .collect(Collectors.toMap(DramaCategory::getId, DramaCategory::getName));
 
-        // 5. 批量查询标签和在线剧集明细，按短剧 ID 分组
+        // 2. 批量查询标签和在线剧集明细，按短剧 ID 分组
         List<Long> dramaIds = dramas.stream().map(Drama::getId).toList();
         Map<Long, List<String>> tagNames = loadTagNames(dramaIds);
         Map<Long, List<EpisodeRagExportDTO>> episodes = loadEpisodes(dramaIds);
 
-        // 6. 由分集明细生成兼容字段“第N集 标题”，供推荐展示使用
+        // 3. 由分集明细生成兼容字段“第N集 标题”
         Map<Long, List<String>> episodeTitles = formatEpisodeTitles(episodes);
 
-        // 7. 组装导出 DTO，保持数据库分页顺序
-        List<DramaRagExportDTO> records = dramas.stream()
+        // 4. 组装导出 DTO，保持传入顺序
+        return dramas.stream()
                 .map(drama -> new DramaRagExportDTO(
                         drama.getId(),
                         drama.getTitle(),
@@ -112,8 +210,6 @@ public class DramaRagExportService {
                         drama.getCommentCount(),
                         episodes.getOrDefault(drama.getId(), List.of())))
                 .toList();
-
-        return PageResult.of(safePage, safeSize, total, records);
     }
 
     /**
@@ -144,7 +240,8 @@ public class DramaRagExportService {
                             row.getEpisodeId(),
                             row.getEpisodeNo(),
                             row.getTitle() == null ? "" : row.getTitle().trim(),
-                            row.getSummary() == null ? "" : row.getSummary()));
+                            row.getSummary() == null ? "" : row.getSummary(),
+                            row.getPricePoints() == null ? 0 : row.getPricePoints()));
         }
         return grouped;
     }
@@ -173,6 +270,19 @@ public class DramaRagExportService {
             grouped.put(dramaId, titles);
         });
         return grouped;
+    }
+
+    /**
+     * 计算两个标签列表的交集数量。
+     */
+    private int commonTagCount(List<String> left, List<String> right) {
+        if (left == null || left.isEmpty() || right == null || right.isEmpty()) {
+            return 0;
+        }
+        Set<String> rightSet = new HashSet<>(right);
+        return (int) left.stream()
+                .filter(tag -> tag != null && rightSet.contains(tag))
+                .count();
     }
 
     /**

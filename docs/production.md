@@ -52,10 +52,13 @@ docker build -f deploy/docker/Dockerfile.service \
 | 真实支付（微信/支付宝）、回调验签、退款、对账 | 需要商户资质、证书和回调域名 |
 | Spring Security + RBAC 持久化、操作审计、全服务 mTLS | 当前为网关 JWT；Agent/Audit 已加 `X-Internal-Token`，其余服务仍靠服务内 header 与内网隔离 |
 | VIP/订阅、优惠券、积分过期、防刷 | 产品功能，未排期 |
-| RAG Kafka 增量索引 | 当前只做全量重建；可由 `DRAMA_CHANGED` 事件驱动 |
+| RAG 增量索引失败自动全量恢复 | 已接入 `DRAMA_CHANGED` 增量索引和调度重试；重试耗尽后仍依赖人工全量 reindex |
 | 搜索上量 | 当前 MySQL LIKE；数据量上来后改 FULLTEXT ngram、ES 或独立搜索服务 |
+| 字幕/ASR 生产化 | Demo 支持 SRT/VTT 导入和离线 faster-whisper 回传；对象存储、大文件分片、版权和人工校验未做 |
+| AI 评估与实验 | 已有 golden set、离线脚本、稳定分桶和指标；没有实验管理后台、自动显著性分析和真实 token 账单 |
+| 创作者 Copilot | 已有 2-3 版本文案、单版本预检和采纳反馈；标签写回、自动 A/B 发布和素材库未做 |
 | 服务/数据库拆分、Kubernetes、压测、监控告警 | 当前单库、jar 本地运行 |
-| 伴看流式输出、服务端聊天历史 | 当前一次请求返回完整回复 |
+| 服务端聊天历史、跨设备同步 | 流式和本地多会话已接入；服务端会话历史未做 |
 
 ## 3. 上线前最低检查
 
@@ -64,4 +67,6 @@ docker build -f deploy/docker/Dockerfile.service \
 3. 为 MySQL、Redis、Kafka、Nacos、Milvus、ES 配置认证和备份。
 4. 配置 HTTPS、CORS 白名单和网关限流。
 5. 用真实数据执行一次全量 reindex，并验证降级路径。
-6. 为服务增加健康检查、日志采集和指标告警。
+6. 执行 P2 字幕表迁移，创建 `msd.transcript.changed.v1`，先全量 reindex 再导入字幕/跑 ASR。
+7. 发布 `content-config.yaml` 的治理/Copilot 配置，跑一次 `python scripts/eval-rag.py`，确认 recall、无结果、引用和防剧透阈值。
+8. 为服务增加健康检查、日志采集和指标告警。

@@ -14,6 +14,7 @@ for %%T in (
   msd.interaction.comment.v1
   msd.interaction.history.v1
   msd.drama.changed.v1
+  msd.transcript.changed.v1
   msd.ai.review.request.v1
   msd.interaction.dlq.v1
 ) do (
@@ -29,6 +30,7 @@ for %%T in (
   msd.interaction.comment.v1
   msd.interaction.history.v1
   msd.drama.changed.v1
+  msd.transcript.changed.v1
   msd.ai.review.request.v1
   msd.interaction.dlq.v1
 ) do (

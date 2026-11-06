@@ -37,6 +37,12 @@ public class Comment {
     private Long replyCount;
     // 状态：0 待审，1 可见，2 隐藏，3 已删除
     private Integer status;
+    // AI 审核状态：0 未审核，1 审核中，2 通过，3 风险，4 失败
+    private Integer aiReviewStatus;
+    // AI 审核结果 JSON，仅作建议
+    private String aiReviewResult;
+    // AI 审核时间
+    private LocalDateTime aiReviewTime;
     // 创建时间
     private LocalDateTime createTime;
     // 更新时间
@@ -208,6 +214,48 @@ public class Comment {
      */
     public void setStatus(Integer status) {
         this.status = status;
+    }
+
+    /**
+     * 获取 AI 审核状态。
+     */
+    public Integer getAiReviewStatus() {
+        return aiReviewStatus;
+    }
+
+    /**
+     * 设置 AI 审核状态。
+     */
+    public void setAiReviewStatus(Integer aiReviewStatus) {
+        this.aiReviewStatus = aiReviewStatus;
+    }
+
+    /**
+     * 获取 AI 审核结果 JSON。
+     */
+    public String getAiReviewResult() {
+        return aiReviewResult;
+    }
+
+    /**
+     * 设置 AI 审核结果 JSON。
+     */
+    public void setAiReviewResult(String aiReviewResult) {
+        this.aiReviewResult = aiReviewResult;
+    }
+
+    /**
+     * 获取 AI 审核时间。
+     */
+    public LocalDateTime getAiReviewTime() {
+        return aiReviewTime;
+    }
+
+    /**
+     * 设置 AI 审核时间。
+     */
+    public void setAiReviewTime(LocalDateTime aiReviewTime) {
+        this.aiReviewTime = aiReviewTime;
     }
 
     /**

@@ -5,6 +5,7 @@ import { deleteDrama, fetchMyDramas, submitDrama } from '../api/creator'
 import { usePagedList } from '../composables/usePagedList'
 import { useToastStore } from '../stores/toast'
 import { formatDateTime } from '../utils/format'
+import AiReviewNotice from '../components/AiReviewNotice.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ErrorState from '../components/ErrorState.vue'
@@ -157,6 +158,12 @@ async function confirmDelete() {
                             <span>提交 {{ item.submitTime ? formatDateTime(item.submitTime) : '—' }}</span>
                         </div>
 
+                        <AiReviewNotice
+                            :review-status="item.reviewStatus"
+                            :ai-review-status="item.aiReviewStatus"
+                            :ai-review-result="item.aiReviewResult"
+                        />
+
                         <div class="card-actions">
                             <button
                                 v-if="canEdit(item)"
@@ -228,6 +235,7 @@ async function confirmDelete() {
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--panel);
+    box-shadow: var(--shadow-soft);
 }
 
 .card-head {
@@ -274,17 +282,17 @@ async function confirmDelete() {
 }
 
 .status-1 {
-    border-color: rgba(255, 179, 63, 0.45);
-    color: var(--brand-2);
+    border-color: #f0ddb4;
+    color: var(--warning-ink);
 }
 
 .status-2 {
-    border-color: rgba(71, 209, 140, 0.45);
+    border-color: #b9e6d0;
     color: var(--ok);
 }
 
 .status-3 {
-    border-color: rgba(255, 92, 61, 0.45);
+    border-color: #f0c6c6;
     color: var(--danger);
 }
 
@@ -292,7 +300,7 @@ async function confirmDelete() {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    color: rgba(255, 255, 255, 0.36);
+    color: var(--muted-soft);
     font-size: 10px;
 }
 
@@ -314,14 +322,34 @@ async function confirmDelete() {
     }
 
     .drama-card {
-        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto;
+        grid-template-areas:
+            "head meta actions"
+            "notice notice actions";
         align-items: center;
-        gap: 24px;
+        column-gap: 24px;
+        row-gap: 6px;
         padding: 14px 20px;
     }
 
     .card-head {
+        grid-area: head;
         align-items: center;
+    }
+
+    .card-meta {
+        grid-area: meta;
+        align-self: center;
+    }
+
+    .drama-card :deep(.ai-review-notice) {
+        grid-area: notice;
+    }
+
+    .card-actions {
+        grid-area: actions;
+        align-self: center;
+        justify-content: flex-end;
     }
 
     .card-copy h2 {

@@ -23,6 +23,12 @@ public final class KafkaTopics {
     /** 首次观看事件。 */
     public static final String INTERACTION_HISTORY = "msd.interaction.history.v1";
 
+    /** 短剧上架/下架/内容变更事件，驱动 RAG 增量索引。 */
+    public static final String DRAMA_CHANGED = "msd.drama.changed.v1";
+
+    /** 分集字幕/ASR 变更事件，驱动 transcript 索引。 */
+    public static final String TRANSCRIPT_CHANGED = "msd.transcript.changed.v1";
+
     /** 互动事件死信队列。 */
     public static final String INTERACTION_DLQ = "msd.interaction.dlq.v1";
 }

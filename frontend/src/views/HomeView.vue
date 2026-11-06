@@ -1,10 +1,11 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { fetchPersonalized } from '../api/content'
+import { evictPersonalized, fetchPersonalized, saveColdStartPreferences } from '../api/content'
 import { fetchHome } from '../api/drama'
-import { fetchContinueWatching } from '../api/interaction'
+import { fetchContinueWatching, trackRecommendationEvent } from '../api/interaction'
 import { useAuthStore } from '../stores/auth'
+import { useToastStore } from '../stores/toast'
 import { formatMs } from '../utils/format'
 import BannerCarousel from '../components/BannerCarousel.vue'
 import DramaCard from '../components/DramaCard.vue'
@@ -16,6 +17,7 @@ import UserAvatar from '../components/UserAvatar.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+const toast = useToastStore()
 
 const home = ref(null)
 const loading = ref(true)
@@ -23,9 +25,36 @@ const error = ref('')
 const activeCategory = ref(null)
 const continueItem = ref(null)
 const personalizedFeed = ref(null)
+const personalizedLoading = ref(true)
+const personalizedFailed = ref(false)
+const coldStartSaving = ref(false)
+const dislikePending = ref(0)
 
 const categories = computed(() => home.value?.categories || [])
 const sections = computed(() => home.value?.sections || [])
+
+/**
+ * 推荐接口失败时用首页热播兜底，避免区块加载后突然消失。
+ */
+const personalizedDisplay = computed(() => {
+    if (personalizedFeed.value) {
+        return personalizedFeed.value
+    }
+    if (!personalizedFailed.value) {
+        return null
+    }
+    const fallback = sections.value.find((section) => section.items?.length)
+    if (!fallback) {
+        return null
+    }
+    return {
+        items: fallback.items.slice(0, 6).map((item) => ({ ...item, reason: '热门推荐' })),
+        personalized: false,
+        coldStart: false,
+        degraded: true,
+        requestId: ''
+    }
+})
 
 /**
  * 分类只在首页已加载的推荐里做本地筛选，后端没有分类列表接口。
@@ -79,6 +108,93 @@ function selectCategory(categoryId) {
 }
 
 /**
+ * 构造推荐归因上下文；降级兜底卡片没有 requestId，不上报。
+ */
+function recommendationContext(index) {
+    const feed = personalizedDisplay.value
+    if (!feed?.requestId) {
+        return null
+    }
+    return {
+        requestId: feed.requestId,
+        position: index + 1
+    }
+}
+
+/**
+ * 上报推荐点击；失败静默，不影响跳转。
+ */
+function trackClick(item, index) {
+    const context = recommendationContext(index)
+    if (!context) {
+        return
+    }
+    trackRecommendationEvent({
+        requestId: context.requestId,
+        dramaId: item.dramaId,
+        eventType: 1,
+        position: context.position
+    }).catch(() => {
+        // 归因失败不影响用户操作
+    })
+}
+
+/**
+ * 标记不感兴趣并立即从当前列表移除。
+ */
+async function dislike(item, index) {
+    const context = recommendationContext(index)
+    if (!context || dislikePending.value) {
+        return
+    }
+    dislikePending.value = item.dramaId
+    try {
+        await trackRecommendationEvent({
+            requestId: context.requestId,
+            dramaId: item.dramaId,
+            eventType: 4,
+            position: context.position
+        })
+        if (personalizedFeed.value) {
+            const items = personalizedFeed.value.items.filter(
+                (card) => card.dramaId !== item.dramaId
+            )
+            personalizedFeed.value = items.length
+                ? { ...personalizedFeed.value, items }
+                : null
+        }
+        // 清理服务端缓存，避免下次加载又出现已负反馈的短剧
+        evictPersonalized().catch(() => {
+            // 缓存清理失败只影响下次刷新时机
+        })
+        toast.success('已减少这类推荐')
+    } catch {
+        toast.push('操作失败，请稍后重试')
+    } finally {
+        dislikePending.value = 0
+    }
+}
+
+/**
+ * 保存冷启动分类偏好并刷新推荐。
+ */
+async function selectColdCategory(categoryId) {
+    if (coldStartSaving.value) {
+        return
+    }
+    coldStartSaving.value = true
+    try {
+        await saveColdStartPreferences([categoryId])
+        await loadPersonalized()
+        toast.success('已记住你的偏好')
+    } catch {
+        toast.push('偏好保存失败，请稍后重试')
+    } finally {
+        coldStartSaving.value = false
+    }
+}
+
+/**
  * 加载首页“继续观看”，失败时静默隐藏。
  */
 async function loadContinue() {
@@ -91,14 +207,20 @@ async function loadContinue() {
 }
 
 /**
- * 加载首页个性化推荐，失败时静默隐藏。
+ * 加载首页个性化推荐；冷启动和降级时也保留热播卡片与说明。
  */
 async function loadPersonalized() {
+    personalizedLoading.value = true
+    personalizedFailed.value = false
     try {
         const feed = await fetchPersonalized(6)
-        personalizedFeed.value = feed?.personalized && feed.items?.length ? feed : null
+        personalizedFeed.value = feed?.items?.length ? feed : null
+        personalizedFailed.value = !personalizedFeed.value
     } catch {
         personalizedFeed.value = null
+        personalizedFailed.value = true
+    } finally {
+        personalizedLoading.value = false
     }
 }
 
@@ -144,7 +266,7 @@ onMounted(() => {
                 <circle cx="11" cy="11" r="7"/>
                 <path d="M16.5 16.5L21 21"/>
             </svg>
-            <span>搜索短剧、演员、剧情</span>
+            <span>搜索短剧，或让 AI 帮你找</span>
         </RouterLink>
 
         <template v-if="loading">
@@ -194,19 +316,75 @@ onMounted(() => {
             </div>
 
             <section
-                v-if="personalizedFeed && !activeCategory"
+                v-if="personalizedLoading && !activeCategory"
+                class="home-section personalized-section"
+                aria-label="正在加载为你推荐"
+            >
+                <div class="section-title">
+                    <h2>为你推荐</h2>
+                    <span>正在准备</span>
+                </div>
+                <div class="shelf">
+                    <SkeletonBlock
+                        v-for="index in 3"
+                        :key="index"
+                        width="136px"
+                        height="181px"
+                        radius="14px"
+                    />
+                </div>
+            </section>
+
+            <section
+                v-else-if="personalizedDisplay && !activeCategory"
                 class="home-section personalized-section"
             >
                 <div class="section-title">
                     <h2>为你推荐</h2>
-                    <span>{{ personalizedFeed.items.length }} 部</span>
+                    <span>{{ personalizedDisplay.items.length }} 部</span>
+                </div>
+                <p v-if="personalizedDisplay.degraded" class="personalized-note">
+                    推荐依据暂时不可用，先按热播展示。
+                </p>
+                <p v-else-if="personalizedDisplay.coldStart" class="personalized-note">
+                    多看几部，推荐会更懂你。
+                </p>
+                <div
+                    v-if="personalizedDisplay.coldStart && categories.length"
+                    class="personalized-chips"
+                >
+                    <button
+                        v-for="category in categories.slice(0, 5)"
+                        :key="category.id"
+                        class="chip"
+                        type="button"
+                        :disabled="coldStartSaving"
+                        @click="selectColdCategory(category.id)"
+                    >
+                        {{ category.name }}
+                    </button>
                 </div>
                 <div class="shelf">
-                    <DramaCard
-                        v-for="item in personalizedFeed.items"
+                    <div
+                        v-for="(item, index) in personalizedDisplay.items"
                         :key="item.dramaId"
-                        :drama="item"
-                    />
+                        class="recommend-card-wrap"
+                    >
+                        <DramaCard
+                            :drama="item"
+                            :reason="item.reason"
+                            :recommendation="recommendationContext(index)"
+                            @click="trackClick(item, index)"
+                        />
+                        <button
+                            class="dislike-btn"
+                            type="button"
+                            :disabled="dislikePending === item.dramaId"
+                            @click.stop="dislike(item, index)"
+                        >
+                            不感兴趣
+                        </button>
+                    </div>
                 </div>
             </section>
 
@@ -282,7 +460,7 @@ onMounted(() => {
 .home-avatar {
     flex: none;
     border-radius: 50%;
-    box-shadow: 0 0 0 2px rgba(255, 179, 63, 0.35);
+    box-shadow: 0 0 0 2px rgba(255, 107, 74, 0.28);
 }
 
 .search-entry {
@@ -293,25 +471,26 @@ onMounted(() => {
     padding: 0 14px;
     border: 1px solid var(--line);
     border-radius: 13px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--surface);
+    box-shadow: var(--shadow-soft);
     color: var(--muted);
     font-size: 12px;
     transition: border-color 150ms ease, background 150ms ease;
 }
 
 .search-entry:hover {
-    border-color: rgba(255, 179, 63, 0.4);
+    border-color: rgba(184, 58, 38, 0.3);
 }
 
 .search-entry:active {
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--surface-muted);
 }
 
 .search-entry svg {
     flex: none;
     width: 16px;
     height: 16px;
-    color: var(--brand-2);
+    color: var(--brand-ink);
 }
 
 .continue-card {
@@ -323,8 +502,9 @@ onMounted(() => {
     border: 1px solid var(--line);
     border-radius: 16px;
     background:
-        radial-gradient(220px 100px at 0% 0%, rgba(255, 179, 63, 0.12), transparent 72%),
-        var(--panel);
+        radial-gradient(220px 100px at 0% 0%, rgba(47, 174, 122, 0.14), transparent 72%),
+        linear-gradient(135deg, var(--surface), #fff6f1);
+    box-shadow: var(--shadow-soft);
     text-align: left;
 }
 
@@ -385,6 +565,19 @@ onMounted(() => {
     gap: 10px;
 }
 
+.personalized-note {
+    margin: -2px 0 0;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.personalized-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .shelf {
     display: flex;
     gap: 12px;
@@ -403,6 +596,44 @@ onMounted(() => {
     scroll-snap-align: start;
 }
 
+.recommend-card-wrap {
+    position: relative;
+    flex: none;
+    width: 136px;
+}
+
+.dislike-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 2;
+    padding: 3px 6px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 9px;
+    line-height: 1.3;
+    opacity: 0;
+    backdrop-filter: blur(6px);
+    transition: opacity 140ms ease;
+}
+
+.recommend-card-wrap:hover .dislike-btn,
+.dislike-btn:focus-visible {
+    opacity: 1;
+}
+
+.dislike-btn:disabled {
+    opacity: 0.5;
+}
+
+@media (hover: none) {
+    .dislike-btn {
+        opacity: 0.82;
+    }
+}
+
 .skeleton-chips {
     display: flex;
     gap: 8px;
@@ -416,7 +647,7 @@ onMounted(() => {
 
 .home-foot {
     padding: 14px 0 8px;
-    color: rgba(255, 255, 255, 0.24);
+    color: var(--muted-soft);
     font-size: 11px;
     letter-spacing: 0.08em;
     text-align: center;

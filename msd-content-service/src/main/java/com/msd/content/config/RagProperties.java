@@ -41,6 +41,8 @@ public class RagProperties {
     private Expansion expansion = new Expansion();
     // 用户偏好个性化配置
     private Personalization personalization = new Personalization();
+    // DRAMA_CHANGED 增量索引配置
+    private Incremental incremental = new Incremental();
 
     /** 是否启用 RAG 链路。 */
     public boolean isEnabled() {
@@ -180,6 +182,16 @@ public class RagProperties {
     /** 设置用户偏好个性化配置。 */
     public void setPersonalization(Personalization personalization) {
         this.personalization = personalization;
+    }
+
+    /** DRAMA_CHANGED 增量索引配置。 */
+    public Incremental getIncremental() {
+        return incremental;
+    }
+
+    /** 设置 DRAMA_CHANGED 增量索引配置。 */
+    public void setIncremental(Incremental incremental) {
+        this.incremental = incremental;
     }
 
     /**
@@ -375,6 +387,8 @@ public class RagProperties {
         private boolean enabled = true;
         // 精排后保留条数
         private int topN = 3;
+        // 精排最低相关性分数，低于该值视为无匹配；0 表示不过滤
+        private double minScore = 0.0;
         // 是否用改写后的 query 精排
         private boolean useRewrittenQuery = false;
         // DashScope Rerank 接口地址
@@ -406,6 +420,16 @@ public class RagProperties {
         /** 设置精排后保留条数。 */
         public void setTopN(int topN) {
             this.topN = topN;
+        }
+
+        /** 精排最低相关性分数。 */
+        public double getMinScore() {
+            return minScore;
+        }
+
+        /** 设置精排最低相关性分数。 */
+        public void setMinScore(double minScore) {
+            this.minScore = minScore;
         }
 
         /** 是否使用改写后的 query 精排。 */
@@ -801,6 +825,85 @@ public class RagProperties {
         /** 设置多查询时每条 query 的召回条数。 */
         public void setPerQueryTopK(int perQueryTopK) {
             this.perQueryTopK = perQueryTopK;
+        }
+    }
+
+    /**
+     * DRAMA_CHANGED 增量索引配置。
+     */
+    public static class Incremental {
+
+        // 是否消费 DRAMA_CHANGED
+        private boolean enabled = true;
+        // 同一短剧事件去抖时间（毫秒）
+        private long debounceMs = 2_000;
+        // 消费者并发数
+        private int concurrency = 2;
+        // eventId 幂等键保留小时数
+        private int dedupTtlHours = 168;
+        // 索引失败后的调度重试次数
+        private int retryAttempts = 3;
+        // 索引失败后的重试间隔（毫秒）
+        private long retryDelayMs = 5_000;
+
+        /** 是否启用增量索引。 */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /** 设置是否启用增量索引。 */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /** 同一短剧事件去抖时间（毫秒）。 */
+        public long getDebounceMs() {
+            return debounceMs;
+        }
+
+        /** 设置同一短剧事件去抖时间（毫秒）。 */
+        public void setDebounceMs(long debounceMs) {
+            this.debounceMs = debounceMs;
+        }
+
+        /** 消费者并发数。 */
+        public int getConcurrency() {
+            return concurrency;
+        }
+
+        /** 设置消费者并发数。 */
+        public void setConcurrency(int concurrency) {
+            this.concurrency = concurrency;
+        }
+
+        /** eventId 幂等键保留小时数。 */
+        public int getDedupTtlHours() {
+            return dedupTtlHours;
+        }
+
+        /** 设置 eventId 幂等键保留小时数。 */
+        public void setDedupTtlHours(int dedupTtlHours) {
+            this.dedupTtlHours = dedupTtlHours;
+        }
+
+        /** 索引失败后的调度重试次数。 */
+        public int getRetryAttempts() {
+            return retryAttempts;
+        }
+
+        /** 设置索引失败后的调度重试次数。 */
+        public void setRetryAttempts(int retryAttempts) {
+            this.retryAttempts = retryAttempts;
+        }
+
+        /** 索引失败后的重试间隔（毫秒）。 */
+        public long getRetryDelayMs() {
+            return retryDelayMs;
+        }
+
+        /** 设置索引失败后的重试间隔（毫秒）。 */
+        public void setRetryDelayMs(long retryDelayMs) {
+            this.retryDelayMs = retryDelayMs;
         }
     }
 

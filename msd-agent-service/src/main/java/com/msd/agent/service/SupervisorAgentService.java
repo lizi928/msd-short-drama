@@ -3,6 +3,7 @@ package com.msd.agent.service;
 import com.alibaba.csp.sentinel.AsyncEntry;
 import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.msd.agent.dto.AgentChatReply;
+import com.msd.agent.routing.AgentCardExtractor;
 import com.msd.agent.routing.AgentReplySanitizer;
 import com.msd.agent.routing.IntentRoute;
 import com.msd.agent.routing.IntentRouter;
@@ -195,17 +196,19 @@ public class SupervisorAgentService {
     }
 
     /**
-     * 构造响应并清洗内部标记。
+     * 构造响应：先提取卡片，再清洗内部标记。
      */
     private AgentChatReply toReply(String reply, String sessionId,
             IntentRouter.RouteDecision decision) {
+        AgentCardExtractor.Extraction extraction = AgentCardExtractor.extract(reply);
         return new AgentChatReply(
-                replySanitizer.sanitize(reply),
+                replySanitizer.sanitize(extraction.text()),
                 sessionId,
                 decision.route().name(),
                 decision.source(),
                 decision.confidence(),
-                Math.round(decision.latencyMs()));
+                Math.round(decision.latencyMs()),
+                extraction.cards());
     }
 
     /**

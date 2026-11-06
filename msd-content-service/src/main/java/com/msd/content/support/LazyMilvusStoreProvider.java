@@ -126,6 +126,71 @@ public class LazyMilvusStoreProvider {
     }
 
     /**
+     * 删除某部短剧的短剧文档和全部分集向量。
+     *
+     * <p>Milvus 按 metadata 中的 dramaId 过滤删除；供增量索引下架时使用。</p>
+     */
+    public void deleteByDrama(Long dramaId) {
+        // 1. 参数非法时直接跳过
+        if (dramaId == null || dramaId <= 0) {
+            return;
+        }
+        // 2. 复用 VectorStore 的过滤删除能力
+        MilvusVectorStore store = get();
+        Filter.Expression filter = new FilterExpressionBuilder()
+                .eq(RagMetadata.DRAMA_ID, dramaId)
+                .build();
+        store.delete(filter);
+    }
+
+    /**
+     * 删除全部字幕片段向量，供全量重建前清理旧数据。
+     */
+    public void deleteAllTranscripts() {
+        MilvusVectorStore store = get();
+        Filter.Expression filter = new FilterExpressionBuilder()
+                .eq(RagMetadata.DOC_TYPE, RagMetadata.DOC_TYPE_TRANSCRIPT)
+                .build();
+        store.delete(filter);
+    }
+
+    /**
+     * 删除某集全部字幕片段向量。
+     */
+    public void deleteTranscriptsByEpisode(Long episodeId) {
+        if (episodeId == null || episodeId <= 0) {
+            return;
+        }
+        MilvusVectorStore store = get();
+        FilterExpressionBuilder builder = new FilterExpressionBuilder();
+        Filter.Expression filter = builder.and(
+                builder.eq(RagMetadata.DOC_TYPE, RagMetadata.DOC_TYPE_TRANSCRIPT),
+                builder.eq(RagMetadata.EPISODE_ID, episodeId))
+                .build();
+        store.delete(filter);
+    }
+
+    /**
+     * 检索字幕片段向量，限定短剧和最大集数。
+     *
+     * <p>当前集的播放位置过滤在 TranscriptContextService 后置执行。</p>
+     */
+    public List<Document> searchTranscripts(String query, Long dramaId, Integer maxEpisodeNo,
+                                            int topK) {
+        if (dramaId == null || maxEpisodeNo == null || maxEpisodeNo <= 0) {
+            return List.of();
+        }
+        FilterExpressionBuilder builder = new FilterExpressionBuilder();
+        Filter.Expression filter = builder.and(
+                builder.eq(RagMetadata.DOC_TYPE, RagMetadata.DOC_TYPE_TRANSCRIPT),
+                builder.and(
+                        builder.eq(RagMetadata.DRAMA_ID, dramaId),
+                        builder.lte(RagMetadata.EPISODE_NO, maxEpisodeNo)))
+                .build();
+        return search(query, topK, filter);
+    }
+
+    /**
      * 执行带过滤条件的向量检索。
      */
     private List<Document> search(String query, int topK, Filter.Expression filter) {

@@ -140,7 +140,7 @@ AI 审核只在 `review_status=1` 时写回 `ai_review_status`：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/internal-source/reviews/pending?limit=20` | 待 AI 审核候选，`review_status=1` 且 AI 状态 0/1/null |
+| GET | `/internal-source/reviews/pending?limit=20&includeFailed=false` | 待 AI 审核候选，`review_status=1` 且 AI 状态 0/1/null；`includeFailed=true` 时包含 AI 失败(4) |
 | GET | `/internal-source/reviews/{dramaId}` | 待审详情，非待审返回 `data=null` |
 | GET | `/internal-source/reviews/tag-dictionary` | 启用中的标签名称，供 Rex 标签建议只读使用 |
 | PUT | `/internal-source/reviews/{dramaId}/ai-result` | 条件写回，仅 `review_status=1` 生效 |
@@ -148,20 +148,22 @@ AI 审核只在 `review_status=1` 时写回 `ai_review_status`：
 写回请求：
 
 ```json
-{"aiReviewStatus":2,"aiReviewResult":"{\"scene\":\"drama_description\",\"verdict\":{\"is_violation\":false,\"violation_reason\":\"\",\"tags\":[]},\"degraded\":false,\"degradedFlags\":[],\"elapsedMs\":1472,\"auditedAt\":\"2026-10-25T23:26:30+08:00\"}"}
+{"aiReviewStatus":2,"aiReviewResult":"{\"scene\":\"drama_description\",\"verdict\":{\"is_violation\":false,\"violation_reason\":\"\",\"tags\":[]},\"degraded\":false,\"degradedFlags\":[],\"elapsedMs\":1472,\"auditedAt\":\"2026-10-25T23:26:30+08:00\",\"requestId\":\"0e6f...\"}"}
 ```
 
 ### 7.3 content-service 审核编排
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/internal/ai/audit/dramas/pending?limit=5` | 批量审核待审短剧，单批上限 20 |
+| POST | `/internal/ai/audit/dramas/pending?limit=5&includeFailed=false` | 批量审核待审短剧，单批上限 20；`includeFailed=true` 时重试 AI 失败项 |
 | POST | `/internal/ai/audit/dramas/{dramaId}` | 审核单部待审短剧 |
 
 - 送审文本：标题 + 副标题 + 简介，截断 5000 字，`scene=drama_description`。
+- 送审前经过 `AiInputGuard`；命中伪造内部标记、明显注入或控制字符时直接写 4，标记 `audit_input_guard`，不调用审核模型和 Rex。
 - 合规调用 DeepSeek 的同时，并行调用本地 RexUniNLU sidecar（8108）生成情感/标签建议。
 - 降级写 4，违规写 3，未违规写 2；Rex 建议不参与状态映射，降级绝不写 2。
 - 单条失败不中断批次；写回 0 行计入 `skipped`。
+- 每条结果写入 `requestId`；审核详情可据此提交 `AUDIT` 场景反馈。
 - 只允许直连 8107，网关不路由。
 
 ### 7.4 管理端接口
@@ -179,7 +181,8 @@ AI 审核只在 `review_status=1` 时写回 `ai_review_status`：
 - 所有迁移使用条件 UPDATE，0 行返回 409，避免并发覆盖。
 - 提交、通过、驳回、下架和 AI 写回都写入 `t_drama_review_log`；AI 操作为 `source=AI`、`operator_id=0`。
 - 通过/驳回/下架后调用 `CacheEvictor` 失效详情和首页；通过后加入布隆过滤器。
-- RAG 索引不会自动更新；新上架短剧需要执行全量 reindex（P5 会在后台提供按钮）。
+- 审核通过/下架会在事务提交后发送 `DRAMA_CHANGED`，content 自动增量更新 RAG 索引；审核台仍保留「重建索引」按钮作为全量兜底，执行前二次确认，完成后展示 `partial/errors/vectorAvailable/bm25Available/elapsedMs` 等完整结果。
+- 审核台支持人工状态 + AI 状态组合筛选、批量 AI 审核（默认 5 条，查看 AI 失败时自动 `includeFailed=true`）、AI 详情抽屉和失败重试；AI 结果含 `requestId`，便于反馈排查。
 
 ### 7.5 手工演示
 
@@ -242,4 +245,52 @@ curl -H "Authorization: Bearer $USER_TOKEN" \
 # 停 sidecar 后重审，预期仍写 2，advisory degraded=true
 curl -X POST http://127.0.0.1:8107/internal/ai/audit/dramas/5003
 curl http://127.0.0.1:8102/internal-source/reviews/5003
+```
+
+### 7.7 创作者 AI 预检
+
+创作者编辑页提供 `POST /internal/ai/audit/precheck`，经网关路径为 `/api/content/internal/ai/audit/precheck`，只允许 `CREATOR`/`ADMIN`。
+
+请求：
+
+```json
+{
+  "title": "长安第一女仵作",
+  "subtitle": "验尸破案，顺便谈个恋爱",
+  "description": "长安城接连出现离奇命案。",
+  "episodeTitles": ["第1集 雨夜尸案", "第2集 追凶"]
+}
+```
+
+响应：
+
+```json
+{
+  "requestId": "uuid",
+  "verdict": {"is_violation": false, "violation_reason": "", "tags": []},
+  "degraded": false,
+  "degradedFlags": [],
+  "suggestionDegraded": false,
+  "titleSuggestions": ["长安第一女仵作：雨夜验尸"],
+  "subtitleSuggestions": ["验尸破案，顺便谈个恋爱"],
+  "tagSuggestions": ["悬疑", "甜宠"],
+  "tips": ["标题可以突出主角身份"],
+  "cached": false,
+  "elapsedMs": 1800
+}
+```
+
+- 合规判断复用 `StructuredAuditService`；文案建议由独立 `precheckChatClient` 生成，Rex 提供标签建议。
+- 预检依赖 `msd.ai.audit.enabled=true`；关闭结构化审核时同时关闭 `msd.ai.precheck.enabled`。
+- `verdict=null` 且 `degraded=true` 表示合规判断未完成，前端只能提示“以人工审核为准”，不得自动通过。
+- 文案建议单独失败时 `suggestionDegraded=true`，不影响合规结论。
+- 只读：不写 `ai_review_status/ai_review_result`，不写 `t_drama_tag_rel`，不改变 `review_status`；建议由创作者手动采纳。
+- 每个用户每天默认 10 次；相同内容哈希缓存 10 分钟，缓存命中不消耗额度。
+- 送审文本经过 `AiInputGuard`，命中注入标记直接返回 400，不调用模型。
+
+```bash
+TOKEN=$(python scripts/gen-jwt.py --user-id 1002 --role CREATOR)
+curl -X POST http://127.0.0.1:8000/api/content/internal/ai/audit/precheck \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"长安第一女仵作","subtitle":"验尸破案","description":"长安城接连出现离奇命案。","episodeTitles":["第1集 雨夜尸案"]}'
 ```

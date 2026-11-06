@@ -1,6 +1,6 @@
 # 业务表结构
 
-单库 `DL`，17 张核心表 + 一致性辅助表（`undo_log`、`t_episode_unlock_ref`、`t_event_consume_log`），按用户、短剧、订单/积分、互动四个域划分。表前缀用于后续按服务拆分：`t_user_*`、`t_drama_*`、`t_recharge_*` / `t_points_*` / `t_episode_unlock`、`t_user_like` / `t_user_favorite` / `t_comment` / `t_watch_history` / `t_outbox_event`。
+单库 `DL`，22 张核心表 + 一致性辅助表（`undo_log`、`t_episode_unlock_ref`、`t_event_consume_log`），按用户、短剧、订单/积分、互动四个域划分。表前缀用于后续按服务拆分：`t_user_*`、`t_drama_*`、`t_episode_subtitle` / `t_episode_transcript_segment`、`t_recharge_*` / `t_points_*` / `t_episode_unlock`、`t_user_like` / `t_user_favorite` / `t_comment` / `t_watch_history` / `t_ai_feedback` / `t_recommendation_exposure` / `t_recommendation_event` / `t_outbox_event`。
 
 ## 1. 约定
 
@@ -25,6 +25,8 @@ erDiagram
     t_user ||--o{ t_drama : "author_id"
     t_drama_category ||--o{ t_drama : "category_id"
     t_drama ||--o{ t_drama_episode : "drama_id"
+    t_drama_episode ||--o{ t_episode_subtitle : "episode_id"
+    t_episode_subtitle ||--o{ t_episode_transcript_segment : "subtitle_id"
     t_drama ||--o{ t_drama_tag_rel : "drama_id"
     t_drama_tag ||--o{ t_drama_tag_rel : "tag_id"
 ```
@@ -52,6 +54,11 @@ erDiagram
     t_user ||--o{ t_user_favorite : "user_id"
     t_user ||--o{ t_comment : "user_id"
     t_user ||--o{ t_watch_history : "user_id"
+    t_user ||--o{ t_ai_feedback : "user_id"
+    t_user ||--o{ t_recommendation_exposure : "user_id"
+    t_user ||--o{ t_recommendation_event : "user_id"
+    t_drama ||--o{ t_recommendation_exposure : "drama_id"
+    t_drama ||--o{ t_recommendation_event : "drama_id"
     t_drama ||--o{ t_user_like : "target_id (target_type=1)"
     t_drama_episode ||--o{ t_user_like : "target_id (target_type=2)"
     t_comment ||--o{ t_user_like : "target_id (target_type=3)"
@@ -72,6 +79,8 @@ erDiagram
 | `t_drama_tag_rel` | 短剧 | 短剧与标签多对多 |
 | `t_drama` | 短剧 | 短剧主表、审核状态、AI 审核结果、冗余计数 |
 | `t_drama_episode` | 短剧 | 分集、视频地址、解锁价格、播放计数 |
+| `t_episode_subtitle` | 短剧 | 分集字幕元数据：语言、格式、来源、片段数 |
+| `t_episode_transcript_segment` | 短剧 | 带毫秒时间轴的字幕片段，供剧情问答和 seek |
 | `t_drama_review_log` | 短剧 | 提交/通过/驳回/下架/AI 审核操作日志 |
 | `t_recharge_plan` | 订单/积分 | 充值档位 |
 | `t_recharge_order` | 订单/积分 | 充值订单 |
@@ -81,8 +90,11 @@ erDiagram
 | `t_episode_unlock_ref` | 订单/积分 | drama 侧解锁计数幂等引用（`unlock_id` 唯一） |
 | `t_user_like` | 互动 | 点赞短剧/剧集/评论 |
 | `t_user_favorite` | 互动 | 收藏短剧 |
-| `t_comment` | 互动 | 两级评论（根评论 + 回复） |
+| `t_comment` | 互动 | 两级评论（根评论 + 回复），含 AI 预审 advisory 列 |
 | `t_watch_history` | 互动 | 观看进度（用户 + 剧集唯一） |
+| `t_ai_feedback` | 互动 | AI 回答赞/踩反馈，`(user_id, scene, request_id)` 幂等；场景含 `CREATOR_COPY`，用于统计 Copilot 采纳率 |
+| `t_recommendation_exposure` | 互动 | 推荐曝光归因，`(request_id, drama_id)` 幂等 |
+| `t_recommendation_event` | 互动 | 点击/播放/完播/负反馈事件，四元组幂等 |
 | `t_outbox_event` | 互动/集成 | 事务性发件箱，可靠投递 Kafka 事件 |
 | `t_event_consume_log` | 互动/集成 | Kafka 消费幂等日志 |
 | `undo_log` | 一致性 | Seata AT 分支回滚日志 |
@@ -96,6 +108,10 @@ erDiagram
 | `t_drama.review_status` | 0 草稿，1 审核中，2 已上架，3 驳回，4 下架 |
 | `t_drama.ai_review_status` | 0 未提交，1 待审核，2 通过，3 驳回，4 失败 |
 | `t_drama_episode.status` | 0 下线，1 上线 |
+| `t_episode_subtitle.status` | 0 隐藏，1 可用 |
+| `t_episode_subtitle.source` | UPLOAD 人工上传，ASR 语音转写 |
+| `t_episode_subtitle.format` | SRT / VTT / ASR |
+| `t_episode_transcript_segment.status` | 0 隐藏，1 可用；只索引 status=1 且字幕 status=1 的片段 |
 | `t_recharge_plan.status` | 0 下架，1 上架 |
 | `t_recharge_order.status` | 0 待支付，1 已支付，2 已取消，3 已过期 |
 | `t_recharge_order.pay_channel` | 1 MOCK，2 微信，3 支付宝 |
@@ -103,6 +119,8 @@ erDiagram
 | `t_points_ledger.biz_type` | 1 订单，2 剧集解锁，3 人工 |
 | `t_user_like.target_type` | 1 短剧，2 剧集，3 评论 |
 | `t_comment.status` | 0 待审，1 可见，2 隐藏，3 已删除 |
+| `t_comment.ai_review_status` | 0 未审核，1 审核中，2 通过，3 风险，4 失败 |
+| `t_recommendation_event.event_type` | 1 点击，2 播放，3 完播，4 不感兴趣 |
 | `t_outbox_event.status` | 0 待发送，1 已发送，2 死信 |
 | `t_outbox_event.event_type` | LIKE、UNLIKE、FAVORITE、UNFAVORITE、COMMENT、COMMENT_DELETED、HISTORY、DRAMA_CHANGED、AI_REVIEW_REQUEST |
 | `t_outbox_event.aggregate_type` | DRAMA、EPISODE、COMMENT、ORDER |

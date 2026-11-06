@@ -17,6 +17,10 @@ public class DramaEpisodeTitleRow {
     private String title;
     // 分集摘要，没有摘要时为空字符串
     private String summary;
+    // 摘要状态：0 缺失，1 生成中，2 可用，3 失败
+    private Integer summaryStatus;
+    // 解锁所需积分，0 表示免费
+    private Integer pricePoints;
 
     /**
      * 获取剧集 ID。
@@ -86,5 +90,33 @@ public class DramaEpisodeTitleRow {
      */
     public void setSummary(String summary) {
         this.summary = summary;
+    }
+
+    /**
+     * 获取摘要状态。
+     */
+    public Integer getSummaryStatus() {
+        return summaryStatus;
+    }
+
+    /**
+     * 设置摘要状态。
+     */
+    public void setSummaryStatus(Integer summaryStatus) {
+        this.summaryStatus = summaryStatus;
+    }
+
+    /**
+     * 获取解锁所需积分。
+     */
+    public Integer getPricePoints() {
+        return pricePoints;
+    }
+
+    /**
+     * 设置解锁所需积分。
+     */
+    public void setPricePoints(Integer pricePoints) {
+        this.pricePoints = pricePoints;
     }
 }

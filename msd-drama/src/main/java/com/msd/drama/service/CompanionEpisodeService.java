@@ -53,7 +53,8 @@ public class CompanionEpisodeService {
                 row.getEpisodeTitle(),
                 nullToEmpty(row.getSummary()),
                 row.getSummaryStatus(),
-                truncate(row.getDramaDescription(), MAX_DESCRIPTION_LENGTH)
+                truncate(row.getDramaDescription(), MAX_DESCRIPTION_LENGTH),
+                row.getPricePoints() == null ? 0 : row.getPricePoints()
         );
     }
 

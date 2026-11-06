@@ -38,6 +38,8 @@ public class EpisodeSummaryService {
     public static final String SOURCE_MISSING = "missing";
     /** 摘要来源：其他实例正在生成。 */
     public static final String SOURCE_GENERATING = "generating";
+    /** 摘要来源：付费集未解锁。 */
+    public static final String SOURCE_LOCKED = "locked";
 
     /** 降级标记：drama 下游不可用。 */
     public static final String FLAG_DRAMA = "drama";
@@ -51,6 +53,8 @@ public class EpisodeSummaryService {
     public static final String FLAG_WRITEBACK = "summary_writeback";
     /** 降级标记：单集索引更新失败。 */
     public static final String FLAG_INDEX = "episode_index";
+    /** 降级标记：付费集未解锁。 */
+    public static final String FLAG_LOCKED = "locked";
 
     /** 摘要生成提示，只允许使用给定事实。 */
     private static final String SUMMARY_SYSTEM_PROMPT = """
@@ -68,18 +72,22 @@ public class EpisodeSummaryService {
     private final EpisodeIndexService indexService;
     // 伴看配置
     private final CompanionProperties properties;
+    // 付费集权限校验
+    private final CompanionAccessService accessService;
 
     /**
-     * 注入短剧客户端、轻量模型、索引服务和伴看配置。
+     * 注入短剧客户端、轻量模型、索引服务、伴看配置和权限校验。
      */
     public EpisodeSummaryService(DramaCompanionClient dramaClient,
                                  CompanionLightModel lightModel,
                                  EpisodeIndexService indexService,
-                                 CompanionProperties properties) {
+                                 CompanionProperties properties,
+                                 CompanionAccessService accessService) {
         this.dramaClient = dramaClient;
         this.lightModel = lightModel;
         this.indexService = indexService;
         this.properties = properties;
+        this.accessService = accessService;
     }
 
     /**
@@ -106,6 +114,42 @@ public class EpisodeSummaryService {
         }
         if (meta == null) {
             return null;
+        }
+        return getSummary(meta, startedAt, flags);
+    }
+
+    /**
+     * 查询摘要并按用户权限校验付费集。
+     *
+     * <p>只用于 C 端工具接口；后台摘要预热仍使用不带用户的 getSummary。</p>
+     */
+    public EpisodeSummaryView getSummaryForUser(Long episodeId, Long userId) {
+        long startedAt = System.currentTimeMillis();
+        List<String> flags = new ArrayList<>();
+
+        // 1. 读取剧集元信息，区分不可见和下游不可用
+        CompanionEpisodeDTO meta;
+        try {
+            Result<CompanionEpisodeDTO> response = dramaClient.companion(episodeId);
+            if (response == null || !response.isSuccess()) {
+                flags.add(FLAG_DRAMA);
+                return degradedView(episodeId, flags, startedAt);
+            }
+            meta = response.getData();
+        } catch (Exception e) {
+            log.warn("companion summary lookup failed: episodeId={}, error={}",
+                    episodeId, rootMessage(e));
+            flags.add(FLAG_DRAMA);
+            return degradedView(episodeId, flags, startedAt);
+        }
+        if (meta == null) {
+            return null;
+        }
+
+        // 2. 付费集未解锁时不生成、不返回摘要
+        if (!accessService.canAccess(userId, meta)) {
+            flags.add(FLAG_LOCKED);
+            return view(meta, "", SOURCE_LOCKED, flags, startedAt);
         }
         return getSummary(meta, startedAt, flags);
     }
@@ -188,7 +232,7 @@ public class EpisodeSummaryService {
         // 7. best-effort 更新单集索引，失败只标记降级
         boolean indexed = indexService.upsert(
                 meta.episodeId(), meta.dramaId(), meta.dramaTitle(),
-                meta.episodeNo(), meta.episodeTitle(), summary);
+                meta.episodeNo(), meta.episodeTitle(), summary, meta.pricePoints());
         if (!indexed) {
             flags.add(FLAG_INDEX);
         }

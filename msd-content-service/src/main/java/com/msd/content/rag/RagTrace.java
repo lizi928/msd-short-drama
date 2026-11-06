@@ -28,6 +28,8 @@ public class RagTrace {
 
     // 改写后的查询，未改写或失败时为 null
     private String rewrittenQuery;
+    // 改写使用的模型，null 表示沿用默认模型
+    private String rewriteModel;
     // 改写是否失败
     private boolean rewriteFailed;
     // 改写耗时（毫秒）
@@ -114,6 +116,16 @@ public class RagTrace {
     /** 记录改写后的查询。 */
     public void setRewrittenQuery(String rewrittenQuery) {
         this.rewrittenQuery = rewrittenQuery;
+    }
+
+    /** 改写使用的模型，null 表示沿用默认模型。 */
+    public String getRewriteModel() {
+        return rewriteModel;
+    }
+
+    /** 记录改写使用的模型。 */
+    public void setRewriteModel(String rewriteModel) {
+        this.rewriteModel = rewriteModel;
     }
 
     /** 改写是否失败。 */

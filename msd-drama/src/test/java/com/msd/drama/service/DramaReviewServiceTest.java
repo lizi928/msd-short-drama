@@ -2,6 +2,7 @@ package com.msd.drama.service;
 
 import com.msd.common.dto.DramaAiReviewResultRequest;
 import com.msd.common.dto.DramaReviewCandidateDTO;
+import com.msd.common.event.DramaChangedAction;
 import com.msd.common.exception.BizException;
 import com.msd.common.result.PageResult;
 import com.msd.drama.cache.CacheEvictor;
@@ -13,6 +14,7 @@ import com.msd.drama.entity.Drama;
 import com.msd.drama.entity.DramaReviewLog;
 import com.msd.drama.mapper.DramaMapper;
 import com.msd.drama.mapper.DramaReviewLogMapper;
+import com.msd.drama.mq.DramaChangedPublisher;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -36,9 +38,11 @@ class DramaReviewServiceTest {
     private final DramaReviewLogMapper reviewLogMapper = mock(DramaReviewLogMapper.class);
     private final CacheEvictor cacheEvictor = mock(CacheEvictor.class);
     private final DramaBloomFilterService bloomFilterService = mock(DramaBloomFilterService.class);
+    private final DramaChangedPublisher changedPublisher = mock(DramaChangedPublisher.class);
 
     private final DramaReviewService service =
-            new DramaReviewService(dramaMapper, reviewLogMapper, cacheEvictor, bloomFilterService);
+            new DramaReviewService(dramaMapper, reviewLogMapper, cacheEvictor,
+                    bloomFilterService, changedPublisher);
 
     /**
      * 创作者可以提交自己的草稿。
@@ -90,6 +94,7 @@ class DramaReviewServiceTest {
         verify(cacheEvictor).evictDetailAfterCommit(5003L);
         verify(cacheEvictor).evictHomeDebounced();
         verify(bloomFilterService).add(5003L);
+        verify(changedPublisher).publishAfterCommit(5003L, DramaChangedAction.UPSERT);
     }
 
     /**
@@ -134,6 +139,7 @@ class DramaReviewServiceTest {
         assertThat(state.reviewStatus()).isEqualTo(4);
         verify(cacheEvictor).evictDetailAfterCommit(5003L);
         verify(cacheEvictor).evictHomeDebounced();
+        verify(changedPublisher).publishAfterCommit(5003L, DramaChangedAction.DELETE);
     }
 
     /**
@@ -171,6 +177,23 @@ class DramaReviewServiceTest {
                 new DramaAiReviewResultRequest(2, "{}"));
 
         assertThat(updated).isTrue();
+    }
+
+    /**
+     * 重试 AI 失败项时，查询条件需要包含 ai_review_status=4。
+     */
+    @Test
+    void includesFailedAiCandidatesWhenRequested() {
+        DramaReviewCandidateRow row = new DramaReviewCandidateRow();
+        row.setDramaId(5003L);
+        row.setTitle("待重试短剧");
+        when(dramaMapper.selectAiReviewCandidates(20, true)).thenReturn(List.of(row));
+
+        List<DramaReviewCandidateDTO> candidates = service.listAiReviewCandidates(20, true);
+
+        assertThat(candidates).singleElement()
+                .satisfies(item -> assertThat(item.dramaId()).isEqualTo(5003L));
+        verify(dramaMapper).selectAiReviewCandidates(20, true);
     }
 
     /**

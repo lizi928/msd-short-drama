@@ -50,6 +50,15 @@ public class EpisodeIndexService {
      */
     public boolean upsert(Long episodeId, Long dramaId, String dramaTitle,
                           Integer episodeNo, String episodeTitle, String summary) {
+        return upsert(episodeId, dramaId, dramaTitle, episodeNo, episodeTitle, summary, 0);
+    }
+
+    /**
+     * 更新单集文档，并保留价格 metadata 供前情权限过滤。
+     */
+    public boolean upsert(Long episodeId, Long dramaId, String dramaTitle,
+                          Integer episodeNo, String episodeTitle, String summary,
+                          Integer pricePoints) {
         // 1. RAG 关闭或文档构建器缺失时视为无需更新
         if (!properties.isEnabled() || episodeId == null) {
             return true;
@@ -61,7 +70,7 @@ public class EpisodeIndexService {
 
         // 2. 构建和全量重建一致的 episode-{id} 文档
         Document document = builder.buildEpisode(
-                dramaId, dramaTitle, episodeId, episodeNo, episodeTitle, summary);
+                dramaId, dramaTitle, episodeId, episodeNo, episodeTitle, summary, pricePoints);
 
         // 3. 两路索引互不影响，任一失败只返回 false
         boolean vectorOk = upsertVector(document);

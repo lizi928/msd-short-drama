@@ -29,6 +29,31 @@ public interface Bm25IndexStore {
     void upsertEpisode(Document document);
 
     /**
+     * 删除某部短剧的短剧文档和全部分集文档，供增量索引下架时使用。
+     *
+     * @return 删除的文档数；索引不存在时返回 0
+     */
+    int deleteByDrama(Long dramaId);
+
+    /**
+     * 删除某集的全部字幕片段文档。
+     *
+     * @return 删除的文档数；索引不存在时返回 0
+     */
+    int deleteTranscriptsByEpisode(Long episodeId);
+
+    /**
+     * 写入单集字幕片段，返回成功条数。
+     */
+    int upsertTranscripts(List<Document> documents);
+
+    /**
+     * 检索字幕片段，限定短剧和最大集数；当前集时间范围由调用方后置过滤。
+     */
+    List<Document> searchTranscripts(String queryText, Long dramaId, Integer maxEpisodeNo,
+                                     int topK);
+
+    /**
      * 刷新索引，保证写入立即可查。
      */
     void refresh();

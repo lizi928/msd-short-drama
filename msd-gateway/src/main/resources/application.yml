@@ -76,14 +76,15 @@ spring:
             - id: msd-agent-service
               uri: lb://msd-agent-service
               predicates:
-                - Path=/api/agent/**
+                # 只暴露真实 Agent 对话和 ADMIN-only Mock；配置/远程审核仅允许直连
+                - Path=/api/agent/internal/ai/agent/chat,/api/agent/internal/ai/chat
               filters:
                 - StripPrefix=2
             - id: msd-content-service
               uri: lb://msd-content-service
               predicates:
-                # 只暴露推荐和伴看聊天；reindex/status/tools 仅允许直连 8107
-                - Path=/api/content/internal/ai/rag/recommend,/api/content/internal/ai/rag/personalized,/api/content/internal/ai/companion/chat,/api/content/internal/ai/audit/dramas/**,/api/content/internal/ai/rag/reindex
+                # 只暴露推荐、相似短剧、伴看和 SSE；reindex/status/tools 仅允许直连 8107
+                - Path=/api/content/internal/ai/rag/recommend,/api/content/internal/ai/rag/recommend/stream,/api/content/internal/ai/rag/personalized,/api/content/internal/ai/rag/personalized/evict,/api/content/internal/ai/rag/preferences,/api/content/internal/ai/rag/related,/api/content/internal/ai/companion/chat,/api/content/internal/ai/companion/chat/stream,/api/content/internal/ai/companion/recap,/api/content/internal/ai/audit/dramas/**,/api/content/internal/ai/audit/precheck,/api/content/internal/ai/copilot/generate,/api/content/internal/ai/rag/reindex
               filters:
                 - StripPrefix=2
 

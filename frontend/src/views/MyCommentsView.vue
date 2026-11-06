@@ -169,7 +169,7 @@ async function confirmDelete() {
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--surface);
 }
 
 .comment-main {
@@ -210,24 +210,24 @@ async function confirmDelete() {
 }
 
 .status-0 {
-    background: rgba(255, 179, 63, 0.14);
-    color: var(--brand-2);
+    background: var(--warning-soft);
+    color: var(--warning-ink);
 }
 
 .status-1 {
-    background: rgba(71, 209, 140, 0.14);
+    background: var(--ok-soft);
     color: var(--ok);
 }
 
 .status-2 {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--surface-muted);
     color: var(--muted);
 }
 
 .comment-content {
     display: -webkit-box;
     overflow: hidden;
-    color: #c9d2e1;
+    color: var(--text-soft);
     font-size: 13px;
     line-height: 1.65;
     white-space: pre-wrap;
@@ -240,7 +240,7 @@ async function confirmDelete() {
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
-    color: rgba(255, 255, 255, 0.35);
+    color: var(--muted-soft);
     font-size: 10px;
 }
 
@@ -249,7 +249,7 @@ async function confirmDelete() {
     padding: 4px 0;
     border: none;
     background: none;
-    color: rgba(255, 107, 107, 0.72);
+    color: var(--danger);
     font-size: 11px;
 }
 
@@ -271,7 +271,7 @@ async function confirmDelete() {
 
     .delete-btn {
         padding: 6px 10px;
-        border: 1px solid rgba(255, 107, 107, 0.28);
+        border: 1px solid #f0c6c6;
         border-radius: 9px;
         font-size: 12px;
     }

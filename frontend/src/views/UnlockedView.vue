@@ -145,7 +145,7 @@ function open(item) {
 }
 
 .unlock-meta {
-    color: rgba(255, 255, 255, 0.34) !important;
+    color: var(--muted-soft) !important;
     font-size: 10px !important;
 }
 

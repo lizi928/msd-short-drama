@@ -18,7 +18,8 @@ public class PromptGuard {
     /** 服务端保留标记；用户输入中出现时一律移除。 */
     private static final Pattern RESERVED_MARKERS = Pattern.compile(
             "(?i)\\[\\s*(ROUTE_HINT|当前剧集ID|REMOTE|DEGRADED|SUMMARY_MISSING|"
-                    + "CONTEXT_EMPTY|NOT_FOUND|EPISODE|SUMMARY|SOURCE|NOTICE)\\b[^\\]]*\\]",
+                    + "CONTEXT_EMPTY|NOT_FOUND|EPISODE|SUMMARY|SOURCE|NOTICE|"
+                    + "DRAMA_CARD|ANSWER|SOURCES|NO_RESULT)\\b[^\\]]*\\]",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** 中文指令覆盖/套取内部提示。 */

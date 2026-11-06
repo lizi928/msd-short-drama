@@ -69,7 +69,7 @@ function goBack() {
     top: 0;
     z-index: 30;
     border-bottom: 1px solid var(--line);
-    background: rgba(9, 11, 16, 0.86);
+    background: rgba(255, 255, 255, 0.86);
     backdrop-filter: blur(18px);
 }
 
@@ -90,7 +90,7 @@ function goBack() {
     padding: 0;
     border: 1px solid var(--line);
     border-radius: 12px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--surface);
     color: var(--text);
 }
 

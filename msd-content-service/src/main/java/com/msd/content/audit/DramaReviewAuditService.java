@@ -2,7 +2,10 @@ package com.msd.content.audit;
 
 import com.msd.common.dto.DramaAiReviewResultRequest;
 import com.msd.common.dto.DramaReviewCandidateDTO;
+import com.msd.common.exception.BizException;
 import com.msd.common.result.Result;
+import com.msd.content.ai.AiInputGuard;
+import com.msd.content.ai.AiMetrics;
 import com.msd.content.client.DramaReviewClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -43,6 +47,8 @@ public class DramaReviewAuditService {
     private static final String FLAG_DRAMA = "drama";
     /** 降级标记：审核内容为空。 */
     private static final String FLAG_EMPTY_CONTENT = "audit_empty_content";
+    /** 降级标记：审核内容命中输入防护。 */
+    private static final String FLAG_INPUT_GUARD = "audit_input_guard";
     /** 降级标记：审核结果序列化失败。 */
     private static final String FLAG_SERIALIZE = "audit_serialize_error";
     /** 写回 JSON 上限，为 drama 侧 8000 字限制留出余量。 */
@@ -56,38 +62,57 @@ public class DramaReviewAuditService {
     private final RexAdvisoryService rexAdvisoryService;
     // Jackson 3 JSON 序列化
     private final JsonMapper jsonMapper;
+    // 送审文本输入防护
+    private final AiInputGuard inputGuard;
+    // AI 链路指标
+    private final AiMetrics metrics;
 
     /**
-     * 注入审核客户端、审核服务、Rex 建议服务和 JSON 序列化器。
+     * 注入审核客户端、审核服务、Rex 建议、序列化器和输入防护。
      */
     public DramaReviewAuditService(DramaReviewClient reviewClient,
                                    StructuredAuditService auditService,
                                    RexAdvisoryService rexAdvisoryService,
-                                   JsonMapper jsonMapper) {
+                                   JsonMapper jsonMapper,
+                                   AiInputGuard inputGuard,
+                                   AiMetrics metrics) {
         this.reviewClient = reviewClient;
         this.auditService = auditService;
         this.rexAdvisoryService = rexAdvisoryService;
         this.jsonMapper = jsonMapper;
+        this.inputGuard = inputGuard;
+        this.metrics = metrics;
+    }
+
+    /**
+     * 批量审核待审短剧；默认不包含 AI 失败项。
+     */
+    public DramaReviewAuditBatchResult auditPending(Integer limit) {
+        return auditPending(limit, false);
     }
 
     /**
      * 批量审核待审短剧；单条失败不中断整批。
+     *
+     * @param includeFailed true 时同时重试 ai_review_status=4 的短剧
      */
-    public DramaReviewAuditBatchResult auditPending(Integer limit) {
+    public DramaReviewAuditBatchResult auditPending(Integer limit, boolean includeFailed) {
+        long startedAt = System.currentTimeMillis();
         // 1. 收敛批量大小
         int size = limit == null ? DEFAULT_LIMIT : Math.max(1, Math.min(limit, MAX_LIMIT));
 
         // 2. 从 drama 拉取候选；下游不可用时整体降级
         List<DramaReviewCandidateDTO> candidates;
         try {
-            Result<List<DramaReviewCandidateDTO>> response = reviewClient.pending(size);
+            Result<List<DramaReviewCandidateDTO>> response =
+                    reviewClient.pending(size, includeFailed);
             if (response == null || !response.isSuccess()) {
-                return degradedBatch();
+                return degradedBatch(startedAt);
             }
             candidates = response.getData() == null ? List.of() : response.getData();
         } catch (Exception e) {
             log.warn("drama review candidates failed: error={}", rootMessage(e));
-            return degradedBatch();
+            return degradedBatch(startedAt);
         }
 
         // 3. 逐条审核并统计
@@ -128,6 +153,8 @@ public class DramaReviewAuditService {
                         + "failed={}, skipped={}, flags={}",
                 result.scanned(), result.audited(), result.passed(), result.rejected(),
                 result.failed(), result.skipped(), result.degradedFlags());
+        metrics.recordRequest("audit", !flags.isEmpty(), flags,
+                System.currentTimeMillis() - startedAt);
         return result;
     }
 
@@ -164,23 +191,33 @@ public class DramaReviewAuditService {
         }
         Long dramaId = candidate.dramaId();
         String content = buildContent(candidate);
+        String requestId = UUID.randomUUID().toString();
 
-        // 2. 先启动 Rex 建议，与合规调用并行；内容为空时跳过
+        // 2. 先做输入防护；命中注入时不启动 Rex 或审核模型
+        AuditCheckResponse response = null;
         CompletableFuture<DramaReviewAdvisory> advisoryFuture =
-                startAdvisory(content, dramaId);
-
-        // 3. 内容为空时按失败处理，避免模型凭空审核
-        AuditCheckResponse response;
+                CompletableFuture.completedFuture(null);
         if (content.isBlank()) {
             response = new AuditCheckResponse(null, true, List.of(FLAG_EMPTY_CONTENT), 0);
         } else {
             try {
-                response = auditService.audit(new AuditCheckRequest(content, SCENE));
-            } catch (Exception e) {
-                log.warn("drama review audit failed: dramaId={}, error={}",
-                        dramaId, rootMessage(e));
-                response = new AuditCheckResponse(
-                        null, true, List.of(StructuredAuditService.FLAG_UNAVAILABLE), 0);
+                inputGuard.validateAuditContent(content);
+            } catch (BizException e) {
+                log.warn("drama review input rejected: dramaId={}, reason={}",
+                        dramaId, e.getMessage());
+                response = new AuditCheckResponse(null, true, List.of(FLAG_INPUT_GUARD), 0);
+            }
+            // 3. 内容通过防护后，启动 Rex 建议并与合规调用并行
+            if (response == null) {
+                advisoryFuture = startAdvisory(content, dramaId);
+                try {
+                    response = auditService.audit(new AuditCheckRequest(content, SCENE));
+                } catch (Exception e) {
+                    log.warn("drama review audit failed: dramaId={}, error={}",
+                            dramaId, rootMessage(e));
+                    response = new AuditCheckResponse(
+                            null, true, List.of(StructuredAuditService.FLAG_UNAVAILABLE), 0);
+                }
             }
         }
 
@@ -197,11 +234,12 @@ public class DramaReviewAuditService {
             json = serializeResult(new DramaAiReviewResult(
                     SCENE, response.verdict(), response.degraded(),
                     response.degradedFlags(), response.elapsedMs(),
-                    OffsetDateTime.now().toString(), advisory));
+                    OffsetDateTime.now().toString(), advisory, requestId));
         } catch (Exception e) {
             log.warn("drama review result serialize failed: dramaId={}, error={}",
                     dramaId, rootMessage(e));
-            return new DramaReviewAuditItem(dramaId, 4, false, List.of(FLAG_SERIALIZE));
+            return new DramaReviewAuditItem(
+                    dramaId, 4, false, List.of(FLAG_SERIALIZE), requestId);
         }
 
         // 7. 条件写回；人工审核已推进时 updated=false
@@ -216,7 +254,7 @@ public class DramaReviewAuditService {
                     dramaId, rootMessage(e));
         }
         return new DramaReviewAuditItem(
-                dramaId, status, updated, response.degradedFlags());
+                dramaId, status, updated, response.degradedFlags(), requestId);
     }
 
     /**
@@ -307,7 +345,9 @@ public class DramaReviewAuditService {
     /**
      * drama 不可用时的空批次。
      */
-    private DramaReviewAuditBatchResult degradedBatch() {
+    private DramaReviewAuditBatchResult degradedBatch(long startedAt) {
+        metrics.recordRequest("audit", true, List.of(FLAG_DRAMA),
+                System.currentTimeMillis() - startedAt);
         return new DramaReviewAuditBatchResult(
                 0, 0, 0, 0, 0, 0, List.of(FLAG_DRAMA), List.of());
     }

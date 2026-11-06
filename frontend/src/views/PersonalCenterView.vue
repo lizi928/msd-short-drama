@@ -9,6 +9,7 @@ import { formatDate } from '../utils/format'
 import AppModal from '../components/AppModal.vue'
 import PageHeader from '../components/PageHeader.vue'
 import UserAvatar from '../components/UserAvatar.vue'
+import NavIcon from '../components/layout/NavIcon.vue'
 
 const auth = useAuthStore()
 const toast = useToastStore()
@@ -35,6 +36,46 @@ const statTiles = computed(() => [
     { key: 'comments', label: '我的评论', value: stats.value?.commentCount, to: '/me/comments', tone: 'comment' },
     { key: 'history', label: '观看记录', value: stats.value?.historyCount, to: '/history', tone: 'clock' }
 ])
+
+// 1. 内容入口固定；工作台入口按角色追加，避免普通用户看到空分组
+const menuGroups = computed(() => {
+    const groups = [
+        {
+            key: 'content',
+            title: '我的内容',
+            items: [
+                { key: 'history', label: '观看记录', icon: 'clock', to: '/history' },
+                { key: 'favorites', label: '我的收藏', icon: 'star', to: '/me/favorites' },
+                { key: 'likes', label: '点赞的短剧', icon: 'heart', to: '/me/likes' },
+                { key: 'comments', label: '我的评论', icon: 'comment', to: '/me/comments' },
+                { key: 'unlocks', label: '已解锁剧集', icon: 'unlock', to: '/me/unlocks' }
+            ]
+        },
+        {
+            key: 'account',
+            title: '账户与工作台',
+            items: [
+                { key: 'recharge', label: '充值中心', icon: 'wallet', to: '/recharge' }
+            ]
+        }
+    ]
+
+    if (auth.user?.role === 'CREATOR' || auth.user?.role === 'ADMIN') {
+        groups[1].items.push({
+            key: 'creator',
+            label: '创作者中心',
+            icon: 'clapper',
+            to: '/creator/dramas'
+        })
+    }
+    if (auth.user?.role === 'ADMIN') {
+        groups[1].items.push(
+            { key: 'review', label: '审核台', icon: 'shield', to: '/admin/reviews' },
+            { key: 'moderation', label: '评论治理', icon: 'filter', to: '/admin/comments' }
+        )
+    }
+    return groups
+})
 
 async function loadProfile() {
     try {
@@ -136,12 +177,15 @@ onMounted(() => {
         <main class="app-main profile-main">
             <aside class="profile-aside">
                 <section class="profile-card">
+                <span class="profile-banner" aria-hidden="true"></span>
                 <div class="profile-head">
-                    <UserAvatar
-                        :name="auth.displayName"
-                        :src="auth.user?.avatarUrl"
-                        :size="58"
-                    />
+                    <span class="profile-avatar">
+                        <UserAvatar
+                            :name="auth.displayName"
+                            :src="auth.user?.avatarUrl"
+                            :size="60"
+                        />
+                    </span>
                     <div class="profile-copy">
                         <div class="name-row">
                             <h1>{{ auth.displayName }}</h1>
@@ -149,31 +193,32 @@ onMounted(() => {
                         </div>
                         <p class="phone">{{ auth.maskedPhone || '—' }}</p>
                     </div>
-                    <button class="edit-btn" type="button" @click="openEdit">编辑</button>
+                    <button class="edit-btn" type="button" @click="openEdit">编辑资料</button>
                 </div>
                 <p class="bio">{{ auth.user?.bio || '还没有填写简介' }}</p>
                 <p class="joined">加入于 {{ joinedText || '—' }}</p>
             </section>
 
             <section class="points-card">
-                <div class="points-main">
-                    <span>积分余额</span>
+                <span class="points-icon" aria-hidden="true">
+                    <NavIcon name="wallet"/>
+                </span>
+                <div class="points-copy">
+                    <span class="points-label">积分余额</span>
                     <strong v-if="pointsLoading">…</strong>
                     <strong v-else-if="pointsError">加载失败</strong>
                     <strong v-else-if="points?.exists">{{ points.balance }}</strong>
                     <strong v-else>未开通</strong>
-                </div>
-                <div class="points-side">
                     <span v-if="!pointsError" class="points-hint">
                         {{ points?.exists === false ? '充值后自动开通积分账户' : '用于解锁付费剧集' }}
                     </span>
-                    <button v-if="pointsError" class="text-btn" type="button" @click="loadPoints">
-                        重试
-                    </button>
-                    <button v-else class="text-btn" type="button" @click="router.push('/recharge')">
-                        充值
-                    </button>
                 </div>
+                <button v-if="pointsError" class="points-action is-ghost" type="button" @click="loadPoints">
+                    重试
+                </button>
+                <button v-else class="points-action" type="button" @click="router.push('/recharge')">
+                    充值
+                </button>
             </section>
             </aside>
 
@@ -221,52 +266,29 @@ onMounted(() => {
                 </div>
             </section>
 
-            <section class="menu-card">
-                <button
-                    v-if="auth.user?.role === 'CREATOR' || auth.user?.role === 'ADMIN'"
-                    class="menu-row"
-                    type="button"
-                    @click="router.push('/creator/dramas')"
-                >
-                    <span>创作者中心</span><span class="chevron">›</span>
-                </button>
-                <button
-                    v-if="auth.user?.role === 'ADMIN'"
-                    class="menu-row"
-                    type="button"
-                    @click="router.push('/admin/reviews')"
-                >
-                    <span>审核台</span><span class="chevron">›</span>
-                </button>
-                <button
-                    v-if="auth.user?.role === 'ADMIN'"
-                    class="menu-row"
-                    type="button"
-                    @click="router.push('/admin/comments')"
-                >
-                    <span>评论治理</span><span class="chevron">›</span>
-                </button>
-                <button class="menu-row" type="button" @click="router.push('/recharge')">
-                    <span>充值中心</span><span class="chevron">›</span>
-                </button>
-                <button class="menu-row" type="button" @click="router.push('/me/favorites')">
-                    <span>我的收藏</span><span class="chevron">›</span>
-                </button>
-                <button class="menu-row" type="button" @click="router.push('/history')">
-                    <span>观看记录</span><span class="chevron">›</span>
-                </button>
-                <button class="menu-row" type="button" @click="router.push('/me/unlocks')">
-                    <span>已解锁剧集</span><span class="chevron">›</span>
-                </button>
-                <button class="menu-row" type="button" @click="router.push('/me/comments')">
-                    <span>我的评论</span><span class="chevron">›</span>
-                </button>
-                <button class="menu-row" type="button" @click="router.push('/me/likes')">
-                    <span>点赞的短剧</span><span class="chevron">›</span>
-                </button>
+            <section v-for="group in menuGroups" :key="group.key" class="menu-card">
+                <div class="menu-head">
+                    <h2>{{ group.title }}</h2>
+                    <span>{{ group.items.length }} 项</span>
+                </div>
+                <div class="menu-grid">
+                    <button
+                        v-for="item in group.items"
+                        :key="item.key"
+                        class="menu-row"
+                        type="button"
+                        @click="router.push(item.to)"
+                    >
+                        <span class="menu-icon" aria-hidden="true">
+                            <NavIcon :name="item.icon"/>
+                        </span>
+                        <span class="menu-label">{{ item.label }}</span>
+                        <span class="chevron">›</span>
+                    </button>
+                </div>
             </section>
 
-            <button class="btn btn-ghost btn-block" type="button" @click="logout">
+            <button class="btn btn-ghost btn-block logout-btn" type="button" @click="logout">
                 退出登录
             </button>
             </div>
@@ -319,23 +341,56 @@ onMounted(() => {
 
 <style scoped>
 .profile-main {
-    gap: 14px;
+    gap: 16px;
 }
 
 .profile-card,
 .points-card,
 .stats-section,
 .menu-card {
-    padding: 16px;
+    padding: 18px;
     border: 1px solid var(--line);
-    border-radius: 16px;
+    border-radius: 18px;
     background: var(--panel);
+    box-shadow: var(--shadow-soft);
+}
+
+/* ---------- 资料卡 ---------- */
+
+.profile-card {
+    position: relative;
+    overflow: hidden;
+    padding-top: 20px;
+}
+
+.profile-banner {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 92px;
+    background:
+        radial-gradient(220px 120px at 12% 0%, rgba(47, 174, 122, 0.28), transparent 70%),
+        radial-gradient(220px 120px at 100% 0%, rgba(255, 107, 74, 0.22), transparent 72%),
+        linear-gradient(120deg, #eaf7ef, #fff7f1);
+    pointer-events: none;
 }
 
 .profile-head {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 13px;
+    margin-top: 22px;
+}
+
+.profile-avatar {
+    display: grid;
+    flex: none;
+    padding: 3px;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: var(--shadow-soft);
 }
 
 .profile-copy {
@@ -353,18 +408,19 @@ onMounted(() => {
 
 .name-row h1 {
     overflow: hidden;
-    font-size: 19px;
+    font-size: 21px;
     font-weight: 800;
+    letter-spacing: -0.01em;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .role-chip {
     flex: none;
-    padding: 2px 7px;
+    padding: 2px 8px;
     border-radius: 999px;
     background: var(--brand-soft);
-    color: var(--brand-2);
+    color: var(--brand-ink);
     font-size: 9px;
 }
 
@@ -376,166 +432,278 @@ onMounted(() => {
 
 .edit-btn {
     flex: none;
-    padding: 6px 10px;
+    padding: 7px 12px;
     border: 1px solid var(--line);
-    border-radius: 9px;
-    background: transparent;
-    color: var(--brand-2);
+    border-radius: 999px;
+    background: var(--surface);
+    box-shadow: var(--shadow-soft);
+    color: var(--brand-ink);
     font-size: 11px;
+    font-weight: 700;
 }
 
 .bio {
-    margin-top: 12px;
-    color: #c2cbdb;
+    position: relative;
+    margin-top: 16px;
+    color: var(--text-soft);
     font-size: 12px;
     line-height: 1.7;
 }
 
 .joined {
-    margin-top: 5px;
-    color: rgba(255, 255, 255, 0.3);
+    position: relative;
+    margin-top: 6px;
+    color: var(--muted-soft);
     font-size: 10px;
 }
 
+/* ---------- 积分卡 ---------- */
+
 .points-card {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
     background:
-        radial-gradient(240px 120px at 100% 0%, rgba(255, 179, 63, 0.16), transparent 70%),
-        var(--panel);
+        radial-gradient(240px 140px at 100% 0%, rgba(47, 174, 122, 0.18), transparent 70%),
+        linear-gradient(135deg, var(--surface), #fff6f1);
 }
 
-.points-main {
-    display: flex;
-    align-items: baseline;
-    gap: 9px;
-    color: var(--muted);
-    font-size: 12px;
-}
-
-.points-side {
+.points-icon {
     display: grid;
-    justify-items: end;
-    gap: 5px;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+    background: var(--surface);
+    color: var(--brand-ink);
+    box-shadow: var(--shadow-soft);
 }
 
-.points-main strong {
-    color: var(--brand-2);
-    font-size: 24px;
+.points-icon :deep(.nav-icon) {
+    width: 22px;
+    height: 22px;
+}
+
+.points-copy {
+    display: grid;
+    min-width: 0;
+    gap: 1px;
+}
+
+.points-label {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.points-copy strong {
+    color: var(--brand-ink);
+    font-size: 26px;
     font-weight: 900;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
 }
 
 .points-hint {
-    color: rgba(255, 255, 255, 0.3);
+    overflow: hidden;
+    color: var(--muted-soft);
     font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.points-action {
+    flex: none;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid rgba(184, 58, 38, 0.25);
+    border-radius: 999px;
+    background: var(--brand-soft);
+    color: var(--brand-ink);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.points-action.is-ghost {
+    border-color: var(--line-strong);
+    background: var(--surface);
 }
 
 .text-btn {
     padding: 0;
     border: none;
     background: none;
-    color: var(--brand-2);
+    color: var(--brand-ink);
     font-size: 11px;
     text-decoration: underline;
 }
 
+/* ---------- 数据统计 ---------- */
+
 .stats-section {
     display: grid;
-    gap: 10px;
-    padding: 14px;
+    gap: 12px;
 }
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 7px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
 }
 
 .stat-card {
     display: grid;
-    justify-items: center;
-    gap: 4px;
-    padding: 10px 4px;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+    justify-items: start;
+    gap: 1px 10px;
+    padding: 12px;
     border: 1px solid var(--line);
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.03);
+    border-radius: 13px;
+    background: var(--surface-soft);
     color: var(--text);
+    text-align: left;
+    transition: border-color 140ms ease, background 140ms ease;
+}
+
+.stat-card:hover {
+    border-color: rgba(184, 58, 38, 0.25);
+    background: var(--surface);
 }
 
 .stat-icon {
     display: grid;
+    grid-row: span 2;
     place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 9px;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
 }
 
 .stat-icon svg {
-    width: 15px;
-    height: 15px;
+    width: 18px;
+    height: 18px;
 }
 
 .tone-heart {
-    background: rgba(255, 92, 61, 0.14);
-    color: #ff8c74;
+    background: var(--brand-soft);
+    color: var(--brand-ink);
 }
 
 .tone-star {
-    background: rgba(255, 179, 63, 0.14);
-    color: var(--brand-2);
+    background: var(--warning-soft);
+    color: var(--warning-ink);
 }
 
 .tone-comment {
-    background: rgba(94, 158, 255, 0.14);
-    color: #8ab4ff;
+    background: #eaf1fb;
+    color: #2f5f9e;
 }
 
 .tone-clock {
-    background: rgba(71, 209, 140, 0.13);
+    background: var(--ok-soft);
     color: var(--ok);
 }
 
 .stat-card strong {
-    font-size: 16px;
-    font-weight: 800;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
 }
 
 .stat-label {
     color: var(--muted);
-    font-size: 9px;
+    font-size: 10px;
     white-space: nowrap;
 }
 
+/* ---------- 菜单 ---------- */
+
 .menu-card {
     display: grid;
-    padding: 4px 14px;
+    gap: 10px;
+    padding: 16px;
+}
+
+.menu-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.menu-head h2 {
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.menu-head span {
+    color: var(--muted-soft);
+    font-size: 10px;
+}
+
+.menu-grid {
+    display: grid;
+    gap: 8px;
 }
 
 .menu-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 10px;
-    padding: 13px 0;
-    border: none;
-    border-bottom: 1px solid var(--line);
-    background: none;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-soft);
     color: var(--text);
     font-size: 13px;
     text-align: left;
+    transition: border-color 140ms ease, background 140ms ease;
 }
 
-.menu-row:last-child {
-    border-bottom: none;
+.menu-row:hover {
+    border-color: rgba(184, 58, 38, 0.25);
+    background: var(--surface);
+}
+
+.menu-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--brand-ink);
+}
+
+.menu-icon :deep(.nav-icon) {
+    width: 16px;
+    height: 16px;
+}
+
+.menu-label {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .chevron {
-    color: rgba(255, 255, 255, 0.3);
+    flex: none;
+    color: var(--muted-soft);
     font-size: 17px;
     line-height: 1;
+}
+
+.logout-btn {
+    color: var(--danger);
+    border-color: #f0c6c6;
+    background: var(--danger-soft);
+    box-shadow: none;
 }
 
 .profile-form {
@@ -552,7 +720,7 @@ onMounted(() => {
 }
 
 .field small {
-    color: rgba(255, 255, 255, 0.28);
+    color: var(--muted-soft);
     font-size: 10px;
     text-align: right;
 }
@@ -569,7 +737,7 @@ onMounted(() => {
     .profile-main {
         grid-template-columns: 340px minmax(0, 1fr);
         align-items: start;
-        gap: 24px;
+        gap: 26px;
     }
 
     .profile-aside {
@@ -582,56 +750,61 @@ onMounted(() => {
         padding: 20px;
     }
 
-    /* 积分卡在窄侧栏里改为上下排布 */
+    /* 积分卡在窄侧栏里改为两行：图标 + 余额，操作按钮换行 */
     .points-card {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 14px;
+        grid-template-columns: auto minmax(0, 1fr);
+        row-gap: 6px;
     }
 
-    .points-side {
-        justify-items: start;
+    .points-icon {
+        grid-row: span 2;
     }
 
-    .points-main strong {
+    .points-action {
+        grid-column: 2;
+        justify-self: start;
+    }
+
+    .points-copy strong {
         font-size: 30px;
     }
 
     .stats-section {
-        padding: 18px;
+        padding: 20px;
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
     }
 
     .stat-card {
-        padding: 16px 6px;
+        padding: 16px;
     }
 
     .stat-card strong {
-        font-size: 20px;
+        font-size: 22px;
     }
 
     .stat-label {
         font-size: 11px;
     }
 
-    /* 菜单改为两列卡片，避免长列表在宽屏上留白 */
     .menu-card {
+        padding: 18px;
+    }
+
+    .menu-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
-        padding: 0;
-        border: none;
-        background: transparent;
     }
 
     .menu-row {
-        padding: 15px 16px;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        background: var(--panel);
-        font-size: 13px;
+        padding: 11px 12px;
     }
 
-    .menu-row:last-child {
-        border-bottom: 1px solid var(--line);
+    .menu-label {
+        font-size: 13px;
     }
 
     .profile-content > .btn {

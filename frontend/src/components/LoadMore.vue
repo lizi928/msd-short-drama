@@ -70,7 +70,7 @@ defineEmits(['load'])
 }
 
 .load-end {
-    color: rgba(255, 255, 255, 0.32);
+    color: var(--muted-soft);
     font-size: 11px;
 }
 </style>

@@ -9,6 +9,15 @@ import UserAvatar from '../UserAvatar.vue'
 const route = useRoute()
 const auth = useAuthStore()
 
+defineProps({
+    assistantEnabled: {
+        type: Boolean,
+        default: true
+    }
+})
+
+const emit = defineEmits(['assistant'])
+
 // 1. 工作台入口按当前用户角色过滤，前端只隐藏入口，后端仍做最终校验
 const studioItems = computed(() => visibleTo(studioNav, auth.user?.role))
 </script>
@@ -68,6 +77,16 @@ const studioItems = computed(() => visibleTo(studioNav, auth.user?.role))
             </nav>
         </section>
 
+        <button
+            v-if="assistantEnabled"
+            class="sidebar-assistant"
+            type="button"
+            @click="emit('assistant')"
+        >
+            <span class="sidebar-assistant-badge">AI</span>
+            <span>AI 找剧</span>
+        </button>
+
         <RouterLink class="sidebar-user" to="/me">
             <UserAvatar :name="auth.displayName" :src="auth.user?.avatarUrl" :size="34"/>
             <span class="sidebar-user-copy">
@@ -90,7 +109,7 @@ const studioItems = computed(() => visibleTo(studioNav, auth.user?.role))
     padding: 20px 14px 18px;
     overflow-y: auto;
     border-right: 1px solid var(--line);
-    background: linear-gradient(180deg, rgba(17, 21, 29, 0.92), rgba(9, 11, 16, 0.92));
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(246, 250, 243, 0.88));
     backdrop-filter: blur(18px);
 }
 
@@ -125,7 +144,7 @@ const studioItems = computed(() => visibleTo(studioNav, auth.user?.role))
 
 .sidebar-group-title {
     padding: 0 10px;
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--muted-soft);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -146,34 +165,65 @@ const studioItems = computed(() => visibleTo(studioNav, auth.user?.role))
 }
 
 .sidebar-link:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--surface-muted);
     color: var(--text);
 }
 
 .sidebar-link.is-active {
     background: var(--brand-soft);
-    color: var(--brand-2);
+    color: var(--brand-ink);
 }
 
 .sidebar-link.is-active :deep(.nav-icon) {
-    filter: drop-shadow(0 0 8px rgba(255, 179, 63, 0.35));
+    filter: none;
+}
+
+.sidebar-assistant {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: auto;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid rgba(184, 58, 38, 0.24);
+    border-radius: 11px;
+    background: linear-gradient(135deg, #ffe7e0, #fff2d8);
+    color: var(--brand-ink);
+    font-size: 12px;
+    font-weight: 700;
+    text-align: left;
+}
+
+.sidebar-assistant:hover {
+    border-color: rgba(184, 58, 38, 0.45);
+}
+
+.sidebar-assistant-badge {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.72);
+    font-size: 9px;
+    letter-spacing: 0.04em;
 }
 
 .sidebar-user {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-top: auto;
     padding: 10px;
     border: 1px solid var(--line);
     border-radius: 12px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--surface);
     color: var(--text);
-    transition: border-color 140ms ease;
+    transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .sidebar-user:hover {
-    border-color: rgba(255, 179, 63, 0.4);
+    border-color: rgba(184, 58, 38, 0.32);
+    box-shadow: var(--shadow-soft);
 }
 
 .sidebar-user-copy {

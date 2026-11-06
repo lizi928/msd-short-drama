@@ -21,10 +21,11 @@ import java.util.List;
 public interface DramaReviewClient {
 
     /**
-     * 查询待 AI 审核的短剧候选。
+     * 查询待 AI 审核的短剧候选；includeFailed=true 时同时返回 AI 失败项。
      */
     @GetMapping("/pending")
-    Result<List<DramaReviewCandidateDTO>> pending(@RequestParam("limit") int limit);
+    Result<List<DramaReviewCandidateDTO>> pending(@RequestParam("limit") int limit,
+                                                  @RequestParam("includeFailed") boolean includeFailed);
 
     /**
      * 查询待审短剧详情。

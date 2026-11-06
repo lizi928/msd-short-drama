@@ -41,6 +41,7 @@ public class ToolGuard {
             "list_drama_episodes",
             "get_episode_summary",
             "search_drama_context",
+            "search_drama_rag",
             "audit_remote");
 
     /** 是否启用沙箱；关闭时保留旧行为。 */

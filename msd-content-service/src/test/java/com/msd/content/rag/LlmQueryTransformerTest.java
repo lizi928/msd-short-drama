@@ -9,9 +9,11 @@ import java.util.Map;
 import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -91,6 +93,29 @@ class LlmQueryTransformerTest {
 
         assertThat(result).isSameAs(query);
         assertThat(trace.getRewrittenQuery()).isNull();
+    }
+
+    /**
+     * 实验指定模型时改写调用应带模型参数。
+     */
+    @Test
+    void usesExperimentModelForRewrite() {
+        ChatClient chatClient = mock(ChatClient.class);
+        ChatClient.ChatClientRequestSpec spec = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
+        when(chatClient.prompt()).thenReturn(spec);
+        when(spec.user(anyString())).thenReturn(spec);
+        when(spec.options(any())).thenReturn(spec);
+        when(spec.call()).thenReturn(callSpec);
+        when(callSpec.content()).thenReturn("先婚后爱 甜宠");
+        LlmQueryTransformer transformer = transformer(chatClient);
+        RagTrace trace = new RagTrace(ORIGINAL);
+        trace.setRewriteModel("deepseek-chat");
+
+        Query result = transformer.transform(query(trace));
+
+        assertThat(result.text()).isEqualTo("先婚后爱 甜宠");
+        verify(spec).options(any());
     }
 
     /**

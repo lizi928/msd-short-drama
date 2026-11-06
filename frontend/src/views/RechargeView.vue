@@ -255,8 +255,9 @@ loadBalance()
     border: 1px solid var(--line);
     border-radius: 18px;
     background:
-        radial-gradient(260px 140px at 100% 0%, rgba(255, 179, 63, 0.2), transparent 72%),
-        var(--panel);
+        radial-gradient(260px 140px at 100% 0%, rgba(47, 174, 122, 0.18), transparent 72%),
+        linear-gradient(135deg, var(--surface), #fff6f1);
+    box-shadow: var(--shadow-soft);
 }
 
 .balance-copy {
@@ -298,13 +299,14 @@ loadBalance()
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--panel);
+    box-shadow: var(--shadow-soft);
     text-align: center;
 }
 
 .plan-card.is-featured {
-    border-color: rgba(255, 179, 63, 0.55);
+    border-color: rgba(255, 107, 74, 0.55);
     background:
-        radial-gradient(180px 100px at 50% 0%, rgba(255, 179, 63, 0.14), transparent 75%),
+        radial-gradient(180px 100px at 50% 0%, rgba(255, 107, 74, 0.13), transparent 75%),
         var(--panel);
 }
 
@@ -328,7 +330,7 @@ loadBalance()
 
 .plan-detail {
     min-height: 14px;
-    color: rgba(255, 255, 255, 0.36);
+    color: var(--muted-soft);
     font-size: 9.5px;
     line-height: 1.4;
 }
@@ -342,7 +344,7 @@ loadBalance()
 
 .recharge-note {
     margin: 0;
-    color: rgba(255, 255, 255, 0.36);
+    color: var(--muted-soft);
     font-size: 10.5px;
     line-height: 1.6;
 }
@@ -368,6 +370,7 @@ loadBalance()
     border: 1px solid var(--line);
     border-radius: 14px;
     background: var(--panel);
+    box-shadow: var(--shadow-soft);
 }
 
 .ledger-main {
@@ -389,7 +392,7 @@ loadBalance()
 }
 
 .ledger-main time {
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--muted-soft);
     font-size: 10px;
 }
 

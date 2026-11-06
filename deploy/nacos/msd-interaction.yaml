@@ -32,6 +32,10 @@ msd:
     comment-cache:
       enabled: true
       ttl-seconds: 15
+    comment-summary:
+      # 评论课代表本地缓存 10 分钟
+      cache-enabled: true
+      cache-ttl-seconds: 600
   kafka:
     # topic 分区扩到 6 后消费者同步扩到 6
     interaction-concurrency: 6

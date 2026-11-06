@@ -10,6 +10,9 @@ spring:
     active: ${SPRING_PROFILES_ACTIVE:dev}
   main:
     web-application-type: reactive
+  # 让 trace 跨 boundedElastic 线程切换，RAG 各阶段串到同一 span
+  reactor:
+    context-propagation: auto
   lifecycle:
     timeout-per-shutdown-phase: 20s
   config:
@@ -17,6 +20,15 @@ spring:
       - nacos:common.yaml?group=DEFAULT_GROUP&refreshEnabled=true
       - optional:nacos:msd-content-service.yaml?group=DEFAULT_GROUP&refreshEnabled=true
       - optional:nacos:content-config.yaml?group=DEFAULT_GROUP&refreshEnabled=true
+  kafka:
+    consumer:
+      group-id: msd-content-rag-index-v1
+      # 首次启动回放历史变更，避免 content 停机期间漏掉索引更新
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    listener:
+      # 单条失败立即重试，不提交后续位点
+      ack-mode: record
   cloud:
     nacos:
       server-addr: ${NACOS_ADDR:127.0.0.1:8848}
@@ -38,6 +50,9 @@ spring:
           msd-interaction:
             connect-timeout: 500
             read-timeout: 800
+          msd-order:
+            connect-timeout: 1000
+            read-timeout: 2000
   ai:
     model:
       chat: deepseek
@@ -74,7 +89,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: always

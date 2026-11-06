@@ -24,9 +24,9 @@ defineProps({
     display: block;
     background: linear-gradient(
         100deg,
-        rgba(255, 255, 255, 0.05) 20%,
-        rgba(255, 255, 255, 0.11) 38%,
-        rgba(255, 255, 255, 0.05) 56%
+        var(--surface-muted) 20%,
+        var(--surface-strong) 38%,
+        var(--surface-muted) 56%
     );
     background-size: 220% 100%;
     animation: skeleton-shimmer 1.4s ease infinite;

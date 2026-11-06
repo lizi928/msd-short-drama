@@ -99,6 +99,26 @@ public interface DramaMapper extends BaseMapper<Drama> {
     long countRagExport();
 
     /**
+     * 查询相似短剧的规则兜底候选，按加权热度降序。
+     *
+     * <p>候选池故意大于最终条数，由服务层按同分类、共同标签重排。</p>
+     */
+    @Select("""
+            SELECT id, title, subtitle, cover_url, description, category_id, author_id, actors,
+                   episode_count, publish_time, view_count, like_count, favorite_count, comment_count
+            FROM t_drama
+            WHERE deleted = 0
+              AND review_status = 2
+              AND publish_time IS NOT NULL
+              AND id <> #{excludeId}
+            ORDER BY (view_count + like_count * 3 + favorite_count * 5 + comment_count * 2) DESC,
+                     publish_time DESC, id DESC
+            LIMIT #{limit}
+            """)
+    List<Drama> selectRelatedCandidates(@Param("excludeId") Long excludeId,
+                                        @Param("limit") int limit);
+
+    /**
      * 统计已上架短剧数量，供布隆过滤器估算容量。
      */
     @Select("""
@@ -184,19 +204,29 @@ public interface DramaMapper extends BaseMapper<Drama> {
 
     /**
      * 查询待 AI 审核的短剧，按提交时间升序。
+     *
+     * @param includeFailed true 时同时返回 AI 失败（ai_review_status=4）的短剧
      */
     @Select("""
+            <script>
             SELECT id AS drama_id, title, subtitle, description, cover_url, actors,
                    author_id, category_id, episode_count, review_status, ai_review_status,
                    ai_review_result, submit_time, ai_review_time, review_time, publish_time
             FROM t_drama
             WHERE deleted = 0
               AND review_status = 1
-              AND (ai_review_status IN (0, 1) OR ai_review_status IS NULL)
+              AND (ai_review_status IN (0, 1) OR ai_review_status IS NULL
+              <if test="includeFailed">
+                OR ai_review_status = 4
+              </if>
+              )
             ORDER BY submit_time ASC, id ASC
             LIMIT #{limit}
+            </script>
             """)
-    List<DramaReviewCandidateRow> selectAiReviewCandidates(@Param("limit") int limit);
+    List<DramaReviewCandidateRow> selectAiReviewCandidates(
+            @Param("limit") int limit,
+            @Param("includeFailed") boolean includeFailed);
 
     /**
      * 按 ID 查询审核详情，不限制人工审核状态。

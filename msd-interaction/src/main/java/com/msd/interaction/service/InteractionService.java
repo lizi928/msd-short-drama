@@ -14,12 +14,15 @@ import com.msd.interaction.dto.LikeResult;
 import com.msd.interaction.entity.Comment;
 import com.msd.interaction.entity.OutboxEvent;
 import com.msd.interaction.entity.WatchHistory;
+import com.msd.interaction.event.CommentCreatedEvent;
 import com.msd.interaction.mapper.CommentMapper;
 import com.msd.interaction.mapper.OutboxEventMapper;
 import com.msd.interaction.mapper.UserFavoriteMapper;
 import com.msd.interaction.mapper.UserLikeMapper;
 import com.msd.interaction.mapper.WatchHistoryMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DeadlockLoserDataAccessException;
 import org.springframework.stereotype.Service;
@@ -60,12 +63,14 @@ public class InteractionService {
     private final CommentCache commentCache;
     // JSON 序列化器，用于生成事件 payload
     private final JsonMapper jsonMapper;
+    // 事务提交后发布评论创建事件，触发异步 AI 预审
+    private final ApplicationEventPublisher eventPublisher;
     // 评论计数异步开关；关闭时回退到 interaction 本地同步计数
     @Value("${msd.interaction.async-counter.enabled:true}")
     private boolean asyncCounter = true;
 
     /**
-     * 注入互动 Mapper 和 JSON 序列化器。
+     * 兼容旧调用方，不触发 AI 预审事件。
      */
     public InteractionService(UserLikeMapper userLikeMapper,
                               UserFavoriteMapper userFavoriteMapper,
@@ -74,6 +79,22 @@ public class InteractionService {
                               OutboxEventMapper outboxEventMapper,
                               CommentCache commentCache,
                               JsonMapper jsonMapper) {
+        this(userLikeMapper, userFavoriteMapper, commentMapper, watchHistoryMapper,
+                outboxEventMapper, commentCache, jsonMapper, null);
+    }
+
+    /**
+     * 注入互动 Mapper、JSON 序列化器和事件发布器。
+     */
+    @Autowired
+    public InteractionService(UserLikeMapper userLikeMapper,
+                              UserFavoriteMapper userFavoriteMapper,
+                              CommentMapper commentMapper,
+                              WatchHistoryMapper watchHistoryMapper,
+                              OutboxEventMapper outboxEventMapper,
+                              CommentCache commentCache,
+                              JsonMapper jsonMapper,
+                              ApplicationEventPublisher eventPublisher) {
         this.userLikeMapper = userLikeMapper;
         this.userFavoriteMapper = userFavoriteMapper;
         this.commentMapper = commentMapper;
@@ -81,6 +102,7 @@ public class InteractionService {
         this.outboxEventMapper = outboxEventMapper;
         this.commentCache = commentCache;
         this.jsonMapper = jsonMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -301,6 +323,11 @@ public class InteractionService {
                 request.dramaId(), request.episodeId(), comment.getId(), rootId, parentId, null);
         outboxEventMapper.insert(event);
         commentCache.invalidateDrama(request.dramaId());
+
+        // 8. 事务提交后异步 AI 预审；只写 AI 列，不改人工 status
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new CommentCreatedEvent(comment.getId()));
+        }
         return new CommentResult(comment.getId(), event.getEventId());
     }
 

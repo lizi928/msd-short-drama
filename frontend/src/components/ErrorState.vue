@@ -44,7 +44,7 @@ defineEmits(['retry'])
     width: 48px;
     height: 48px;
     border-radius: 50%;
-    background: rgba(255, 107, 107, 0.12);
+    background: var(--danger-soft);
     color: var(--danger);
 }
 

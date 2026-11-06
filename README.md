@@ -1,6 +1,6 @@
 # 码上短剧
 
-微服务 + AI 短剧平台。0.1-0.4、2.1-2.6、**分布式事务与异步解耦（数据一致性）**、**RAG 内容推荐**、**首页多级缓存与 Java 21 虚拟线程**、**AI 伴看与结构化审核**、**RexUniNLU 情感/标签建议**模块已完成并验证；Vue 3 + Vite 前端已接入登录、首页（含继续观看、个性化推荐）、详情、播放/解锁、互动、个人中心、充值中心、创作者工作台、审核台和 AI 伴看面板。剩余功能与分阶段计划见 [docs/roadmap.md](docs/roadmap.md)。
+微服务 + AI 短剧平台。0.1-0.4、2.1-2.6、**分布式事务与异步解耦（数据一致性）**、**RAG 内容推荐**、**首页多级缓存与 Java 21 虚拟线程**、**AI 伴看与结构化审核**、**RexUniNLU 情感/标签建议**、**SSE 流式回答/引用/多会话**、**前情提要**、**相似短剧**、**个性化 v2/推荐归因**、**评论课代表/评论预审**、**创作者 AI 预检**、**RAG 增量索引**、**字幕/ASR 剧情问答**、**全局 AI 找剧助手**、**AI 评估/灰度/成本**、**创作者 Copilot**模块已完成并验证；Vue 3 + Vite 前端已接入登录、首页（含继续观看、个性化推荐）、详情、播放/解锁、互动、个人中心、充值中心、创作者工作台、审核台、AI 伴看面板和全局找剧助手。剩余功能与分阶段计划见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 技术基线
 
@@ -22,11 +22,11 @@
 | `msd-gateway` | 8000 | 统一网关，路由与前端静态托管 |
 | `msd-common` | - | 统一返回体、错误码、异常、常量 |
 | `msd-user` | 8101 | 用户与认证 |
-| `msd-drama` | 8102 | 短剧、剧集、分类、标签、搜索、创作者工作台、审核状态机与 AI 审核写回；Caffeine + Redis 多级缓存、布隆、xxl-job、虚拟线程 |
+| `msd-drama` | 8102 | 短剧、剧集、分类、标签、搜索、创作者工作台、字幕/ASR 导入、审核状态机与 AI 审核写回；Caffeine + Redis 多级缓存、布隆、xxl-job、虚拟线程；审核通过/下架发送 `DRAMA_CHANGED` |
 | `msd-order` | 8103 | 充值下单、模拟支付、积分账户/流水、剧集解锁、已解锁列表 |
 | `msd-interaction` | 8104 | 点赞、收藏、评论、评论治理、观看历史、继续观看、outbox |
-| `msd-agent-service` | 8105 / 8106 | AI Agent / AgentScope Supervisor（8105，含 companion-agent）；audit A2A 服务（8106，`audit` profile） |
-| `msd-content-service` | 8107 | RAG 推荐、个性化推荐、多查询扩展、AI 伴看、分集摘要、结构化审核、Rex 情感/标签建议；Milvus + ES 混合检索、Rerank |
+| `msd-agent-service` | 8105 / 8106 | AI Agent / AgentScope Supervisor（8105，含 companion-agent/search-agent）；audit A2A 服务（8106，`audit` profile） |
+| `msd-content-service` | 8107 | RAG 推荐、个性化推荐、多查询扩展、AI 伴看、字幕剧情问答、分集摘要、结构化审核、Rex 情感/标签建议；Milvus + ES 混合检索、Rerank |
 | `rex-uninlu-service` | 8108 | RexUniNLU 本地 sidecar：短剧情感分析、标签建议，仅 advisory、fail-open |
 
 > 冒烟模块 `msd-infra-smoke` 与原始 Nacos 示例 `msd-demo` 在 0.4 验证通过后已删除，仓库只保留生产代码。验证结论与可复用配置见 [docs/chapter-0-baseline.md](docs/chapter-0-baseline.md)。
@@ -359,7 +359,7 @@ seq 1 30 | xargs -P 30 -I{} curl -s -o /dev/null -w "%{http_code}\n" \
 - 熔断 10 秒后进入半开。
 
 ```bash
-TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+TOKEN=$(python scripts/gen-jwt.py --user-id 1001 --role ADMIN)
 curl -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8000/api/agent/internal/ai/chat?prompt=hi"
 ```
@@ -385,9 +385,11 @@ msd:
 `msd-agent-service` 同时提供基于 AgentScope Java 2.0 的 Supervisor，与上面的 Mock 熔断链路并存：
 
 - 新接口：`POST /api/agent/internal/ai/agent/chat`（直连 8105 为 `/internal/ai/agent/chat`），请求体 `{"message":"...","sessionId":"...","episodeId":6005}`；`episodeId` 可选，伴看问题需要传，`X-User-Id` 由网关 JWT 过滤器注入。
-- 主 Agent `supervisor` 读取 `.agentscope/workspace/AGENTS.md`，按路由规则调度 `social-agent`、`audit-agent`、`data-agent`、`companion-agent`。
-- 秒级意图路由：`POST /api/agent/internal/ai/agent/route`（直连 8105 为 `/internal/ai/agent/route`）只做规则/缓存决策，不调用模型；高置信度结果注入 `[ROUTE_HINT=...]`，AUDIT 可走远程快速通道，详见 [docs/companion.md](docs/companion.md#6-意图路由与工具沙箱)。
-- 工具：`get_home_dramas`、`get_drama_detail`、`list_drama_episodes`，通过 Feign 查询 `msd-drama` 的只读内部接口；审核任务另有 `audit_remote` 远程 A2A 工具；伴看使用 `get_episode_summary`、`search_drama_context` 查询 content-service 的当前集摘要和前情，详见 [docs/companion.md](docs/companion.md)。
+- 主 Agent `supervisor` 读取 `.agentscope/workspace/AGENTS.md`，按路由规则调度 `social-agent`、`audit-agent`、`data-agent`、`companion-agent`、`search-agent`。
+- 全局找剧：`SEARCH`/`RECOMMEND` 路由到 `search-agent`，调用真实 RAG 工具 `search_drama_rag`；工具返回 `[DRAMA_CARD]`，服务端解析为 `cards` 供前端渲染可点击短剧卡片。
+- 秒级意图路由：`POST http://127.0.0.1:8105/internal/ai/agent/route` 只做规则/缓存决策，不调用模型；网关不暴露该路由。高置信度结果注入 `[ROUTE_HINT=...]`，AUDIT 可走远程快速通道，详见 [docs/companion.md](docs/companion.md#6-意图路由与工具沙箱)。
+- 网关只暴露 `/api/agent/internal/ai/agent/chat` 和 ADMIN-only Mock `/api/agent/internal/ai/chat`；配置接口和远程审核仅允许直连。
+- 工具：`get_home_dramas`、`get_drama_detail`、`list_drama_episodes`，通过 Feign 查询 `msd-drama` 的只读内部接口；审核任务另有 `audit_remote` 远程 A2A 工具；伴看使用 `get_episode_summary`、`search_drama_context` 查询 content-service 的当前集摘要和前情；找剧使用 `search_drama_rag` 调用 content RAG，详见 [docs/companion.md](docs/companion.md)。
 - 工具权限沙箱：只注册 allowlist 业务工具，校验 ID/分页/文本长度并记录参数哈希；shell/文件/Web/记忆工具关闭，单会话最多 4 次 `agent_spawn`。
 - 8105/8106 支持 `X-Internal-Token`；生产设置 `MSD_INTERNAL_TOKEN`，网关会剥离客户端伪造值后为 Agent 路由注入。
 - 会话状态存 Redis，key 前缀 `mashang:agent:session:`；Redis 连接复用 Nacos `common.yaml` 的 `spring.data.redis.*`。
@@ -401,9 +403,9 @@ curl -X POST "http://127.0.0.1:8000/api/agent/internal/ai/agent/chat" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"message":"查询短剧5001的详情并总结","sessionId":"demo-1"}'
 
-# 只验证路由决策，不消耗模型调用
-curl -X POST "http://127.0.0.1:8000/api/agent/internal/ai/agent/route" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+# 只验证路由决策，不消耗模型调用；该接口只允许直连 8105
+curl -X POST "http://127.0.0.1:8105/internal/ai/agent/route" \
+  -H "Content-Type: application/json" \
   -d '{"message":"第3集里他们为什么吵架","sessionId":"route-1"}'
 ```
 
@@ -437,12 +439,25 @@ curl -X POST http://127.0.0.1:8105/internal/ai/agent/audit/remote \
 
 ## RAG 内容推荐
 
-`msd-content-service`（8107）实现短剧 RAG 推荐：查询改写 → Milvus 向量 + Elasticsearch BM25 并行检索 → RRF 融合 → DashScope Rerank → 基于检索资料的推荐理由。
+`msd-content-service`（8107）实现短剧 RAG 推荐：查询改写 → Milvus 向量 + Elasticsearch BM25 并行检索 → RRF 融合 → DashScope Rerank → 基于检索资料的推荐理由。content（8107）和 interaction（8104）的 `/actuator/prometheus` 暴露 AI 请求、降级、耗时和反馈指标。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/content/internal/ai/rag/recommend` | 经网关，需要登录；返回回答和最多 3 条来源 |
-| GET | `/api/content/internal/ai/rag/personalized` | 经网关，需要登录；首页「为你推荐」卡片，不调用 LLM |
+| POST | `/api/content/internal/ai/rag/recommend/stream` | 经网关，需要登录；SSE 流式找剧，事件 `meta → delta* → sources → done` |
+| GET | `/api/content/internal/ai/rag/related` | 经网关，需要登录；相似短剧，Milvus 向量召回，规则兜底 |
+| GET | `/api/content/internal/ai/rag/personalized` | 经网关，需要登录；多路召回首页推荐，返回归因 `requestId` |
+| POST | `/api/content/internal/ai/rag/preferences` | 经网关，需要登录；保存冷启动分类偏好 |
+| POST | `/api/interaction/internal/recommendations/events` | 经网关，需要登录；推荐点击/播放/完播/不感兴趣归因 |
+| GET | `/api/interaction/internal/ai/comments/summary` | 经网关，需要登录；评论课代表（仅供参考） |
+| GET | `/api/content/internal/ai/companion/recap` | 经网关，需要登录；当前集及之前的前情提要 |
+| POST | `/api/content/internal/ai/audit/precheck` | 经网关，需要登录；创作者提交前 AI 预检，不写审核状态 |
+| POST | `/api/content/internal/ai/copilot/generate` | 经网关，CREATOR/ADMIN；生成 2-3 版标题/副标题/标签方案 |
+| POST | `/api/drama/internal/creator/dramas/{dramaId}/episodes/{episodeId}/subtitles` | 经网关，CREATOR/ADMIN；导入 SRT/VTT 字幕 |
+| POST | `/internal-source/episodes/{episodeId}/transcript` | 直连 8102；ASR worker 回传带时间戳片段 |
+| GET | `/internal-source/rag/episodes/{episodeId}/transcript` | 直连 8102；字幕导出供 content 索引 |
+| POST | `/api/agent/internal/ai/agent/chat` | 经网关，需要登录；全局 AI 找剧助手，返回 `cards` |
+| POST | `/api/interaction/internal/ai/feedback` | 经网关，需要登录；按 `requestId` 提交 AI 回答赞/踩 |
 | POST | `/internal/ai/rag/reindex` | 直连 8107；全量重建 Milvus/ES 索引 |
 | GET | `/internal/ai/rag/status` | 直连 8107；Milvus/ES 可用性和最近索引结果 |
 
@@ -451,6 +466,9 @@ TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
 curl -X POST http://127.0.0.1:8000/api/content/internal/ai/rag/recommend \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"有没有那种先婚后爱的甜宠剧","topK":3}'
+
+# 离线评测：recall@3、无结果、引用、防剧透和 P95
+python scripts/eval-rag.py --output eval/report.json
 
 # 直连重建和状态
 curl -X POST http://127.0.0.1:8107/internal/ai/rag/reindex \
@@ -462,6 +480,13 @@ curl http://127.0.0.1:8107/internal/ai/rag/status
 - 检索：两路各 Top 20，RRF k=60；Rerank 精排 Top 3。
 - 多查询扩展：原查询 + 1 个 LLM 变体 + 可选偏好 query，跨查询 RRF 后再精排；关闭时保持单查询行为。
 - 个性化：interaction 聚合收藏/点赞/观看权重，content 结合目录分类/标签生成画像；首页卡片规则排序，不调用 LLM。
+- 流式推荐：SSE 首帧带 `requestId`，末尾带 sources；网关或首帧失败时前端自动回退普通 JSON。
+- 相似短剧：用当前短剧文本做 Milvus 向量召回，排除自身；无向量时回退同分类/共同标签/热度。
+- 个性化 v2：继续观看 + 共同观看 + 向量 + 偏好 + 热播多路召回，曝光/点击/播放/完播写 `t_recommendation_*`，支持不感兴趣和冷启动分类偏好。
+- 评论 AI：评论课代表只聚合观点；评论异步预审只写 `ai_review_*`，不自动修改人工 `status`。
+- 创作者预检：提交前复用结构化审核给出合规结论、标题/副标题/标签建议；只读，不写审核状态，默认 10 次/人/天。
+- 增量索引：审核通过/下架在事务提交后发送 `msd.drama.changed.v1`，content 按 `dramaId` 增量更新 Milvus/ES；失败重试，全量 `reindex` 兜底。
+- 字幕/ASR：SRT/VTT 导入或离线 faster-whisper 转写后，content 建立 `docType=transcript` 索引；伴看按 `positionMs` 只取已播放片段，回答带 `[第X集 mm:ss]` 引用，前端可点击 seek。
 - 降级标记：`rewrite`、`expansion`、`personalization`、`vector`、`bm25`、`rerank`、`generation`、`timeout`；推荐接口始终返回 200 和可读兜底文案。
 - `reindex`/`status` 不经网关，避免误操作。
 - Milvus 2.6.x 的 `common.storageType` 使用 `remote`；`minio` 已废弃，会导致写入 panic。
@@ -505,14 +530,14 @@ curl http://127.0.0.1:9411/health
 验证完整链路：
 
 ```bash
-TOKEN=$(python scripts/gen-jwt.py --user-id 1003 --role USER)
+ADMIN_TOKEN=$(python scripts/gen-jwt.py --user-id 1001 --role ADMIN)
 
-# Gateway -> interaction -> agent
-curl -H "Authorization: Bearer $TOKEN" \
+# Gateway -> interaction -> agent（Mock 代理仅 ADMIN）
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
   "http://127.0.0.1:8000/api/interaction/internal/ai/chat?prompt=hi"
 
 # Gateway -> interaction -> user（Feign）
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
   "http://127.0.0.1:8000/api/interaction/internal/users/1003/profile"
 ```
 

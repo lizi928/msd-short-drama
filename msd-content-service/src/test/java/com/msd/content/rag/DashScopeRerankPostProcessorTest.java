@@ -58,6 +58,35 @@ class DashScopeRerankPostProcessorTest {
     }
 
     /**
+     * 低于 minScore 的候选不进入最终来源，全部低于阈值时返回空。
+     */
+    @Test
+    void filtersCandidatesBelowMinScore() throws Exception {
+        HttpClient client = mock(HttpClient.class);
+        HttpResponse<String> httpResponse = response(200, """
+                {"output":{"results":[
+                  {"index":0,"relevance_score":0.9},
+                  {"index":1,"relevance_score":0.2},
+                  {"index":2,"relevance_score":0.1}
+                ]}}
+                """);
+        when(client.send(any(HttpRequest.class),
+                ArgumentMatchers.<HttpResponse.BodyHandler<String>>any()))
+                .thenReturn(httpResponse);
+        RagProperties properties = properties("test-key");
+        properties.getRerank().setMinScore(0.25);
+        DashScopeRerankPostProcessor processor = processor(properties, client);
+        RagTrace trace = new RagTrace("original query");
+        trace.setRequestedTopK(3);
+
+        List<Document> result = processor.process(query(trace), documents(5));
+
+        assertThat(result).extracting(Document::getId).containsExactly("drama-0");
+        assertThat(trace.getFinalDocuments()).hasSize(1);
+        assertThat(trace.getDegradedFlags()).isEmpty();
+    }
+
+    /**
      * 请求异常时回退 RRF 前 topN，并标记 rerank 降级。
      */
     @Test

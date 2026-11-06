@@ -54,24 +54,38 @@ public class CompanionContextService {
     private final ElasticsearchBm25Store bm25Store;
     // 伴看配置
     private final CompanionProperties properties;
+    // 付费集权限校验
+    private final CompanionAccessService accessService;
 
     /**
-     * 注入短剧客户端、混合检索器、BM25 存储和伴看配置。
+     * 注入短剧客户端、混合检索器、BM25 存储、伴看配置和权限校验。
      */
     public CompanionContextService(DramaCompanionClient dramaClient,
                                    HybridRetriever hybridRetriever,
                                    ElasticsearchBm25Store bm25Store,
-                                   CompanionProperties properties) {
+                                   CompanionProperties properties,
+                                   CompanionAccessService accessService) {
         this.dramaClient = dramaClient;
         this.hybridRetriever = hybridRetriever;
         this.bm25Store = bm25Store;
         this.properties = properties;
+        this.accessService = accessService;
     }
 
     /**
      * 查询当前集之前的前情；剧集不可见时返回 null。
      */
     public CompanionContextView retrieve(String query, Long currentEpisodeId, Integer topK) {
+        return retrieve(query, currentEpisodeId, topK, null);
+    }
+
+    /**
+     * 查询当前集之前的前情，并按用户权限过滤付费集。
+     *
+     * @param userId 当前用户；为空时只保留免费集
+     */
+    public CompanionContextView retrieve(String query, Long currentEpisodeId, Integer topK,
+                                         Long userId) {
         long startedAt = System.currentTimeMillis();
         List<String> flags = new ArrayList<>();
 
@@ -93,24 +107,32 @@ public class CompanionContextService {
         if (meta == null) {
             return null;
         }
-        return retrieve(query, meta, topK, startedAt, flags);
+        return retrieve(query, meta, topK, startedAt, flags, userId);
     }
 
     /**
      * 使用已读取的剧集元信息检索前情，避免聊天链路重复调用 drama。
      */
     public CompanionContextView retrieve(String query, CompanionEpisodeDTO meta, Integer topK) {
+        return retrieve(query, meta, topK, null);
+    }
+
+    /**
+     * 使用已读取的剧集元信息检索前情，并按用户权限过滤付费集。
+     */
+    public CompanionContextView retrieve(String query, CompanionEpisodeDTO meta, Integer topK,
+                                         Long userId) {
         if (meta == null) {
             return null;
         }
-        return retrieve(query, meta, topK, System.currentTimeMillis(), new ArrayList<>());
+        return retrieve(query, meta, topK, System.currentTimeMillis(), new ArrayList<>(), userId);
     }
 
     /**
      * 前情检索主流程，元信息已经完成可见性校验。
      */
     private CompanionContextView retrieve(String query, CompanionEpisodeDTO meta, Integer topK,
-                                          long startedAt, List<String> flags) {
+                                          long startedAt, List<String> flags, Long userId) {
         Long dramaId = meta.dramaId();
         Integer episodeNo = meta.episodeNo();
 
@@ -139,8 +161,8 @@ public class CompanionContextService {
         // 3. 保留两路检索的降级标记
         flags.addAll(trace.getDegradedFlags());
 
-        // 4. 后置校验、去重并截断
-        List<ContextItem> items = filterAndMap(documents, meta, topK);
+        // 4. 后置校验、去重、付费集过滤并截断
+        List<ContextItem> items = filterAndMap(documents, meta, topK, userId);
         if (items.isEmpty() && flags.isEmpty() && bm25Store.countEpisodes(dramaId) == 0) {
             flags.add(FLAG_EPISODE_INDEX);
         }
@@ -151,13 +173,18 @@ public class CompanionContextService {
      * 过滤未来集、跨剧文档和重复集，再转换为返回模型。
      */
     private List<ContextItem> filterAndMap(List<Document> documents,
-                                           CompanionEpisodeDTO meta, Integer topK) {
+                                           CompanionEpisodeDTO meta, Integer topK,
+                                           Long userId) {
         if (documents == null || documents.isEmpty()) {
             return List.of();
         }
         int limit = resolveTopK(topK);
         int maxSummaryChars = Math.max(properties.getContext().getMaxSummaryChars(), 1);
         Set<Long> seen = new HashSet<>();
+        // 只有候选里出现付费集时才查订单，免费剧不增加额外调用
+        Set<Long> unlockedEpisodeIds = documents.stream().anyMatch(this::hasPaidPrice)
+                ? accessService.unlockedEpisodeIds(userId, meta.dramaId())
+                : Set.of();
         List<ContextItem> items = new ArrayList<>();
 
         for (Document document : documents) {
@@ -187,7 +214,14 @@ public class CompanionContextService {
                 continue;
             }
 
-            // 3. 摘要截断后返回，分数优先取 RRF
+            // 3. 付费且未解锁的前情不能进入上下文
+            int pricePoints = integerValue(metadata.get(RagMetadata.PRICE_POINTS)) == null
+                    ? 0 : integerValue(metadata.get(RagMetadata.PRICE_POINTS));
+            if (pricePoints > 0 && !unlockedEpisodeIds.contains(episodeId)) {
+                continue;
+            }
+
+            // 4. 摘要截断后返回，分数优先取 RRF
             String summary = truncate(
                     stringValue(metadata.get(RagMetadata.SUMMARY)), maxSummaryChars);
             double score = firstDouble(
@@ -198,12 +232,24 @@ public class CompanionContextService {
                     stringValue(metadata.get(RagMetadata.EPISODE_TITLE)),
                     summary,
                     score,
-                    retrievalSources(metadata)));
+                    retrievalSources(metadata),
+                    pricePoints));
             if (items.size() >= limit) {
                 break;
             }
         }
         return List.copyOf(items);
+    }
+
+    /**
+     * 判断文档是否是付费集。
+     */
+    private boolean hasPaidPrice(Document document) {
+        if (document == null) {
+            return false;
+        }
+        Integer pricePoints = integerValue(document.getMetadata().get(RagMetadata.PRICE_POINTS));
+        return pricePoints != null && pricePoints > 0;
     }
 
     /**

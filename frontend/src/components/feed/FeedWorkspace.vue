@@ -2,7 +2,10 @@
 import { computed } from 'vue'
 import CommentSection from '../comments/CommentSection.vue'
 import CompanionChat from '../companion/CompanionChat.vue'
+import EpisodeRecap from '../companion/EpisodeRecap.vue'
 import EpisodeRail from '../player/EpisodeRail.vue'
+import GradientCover from '../GradientCover.vue'
+import DramaInfoContent from './DramaInfoContent.vue'
 
 const props = defineProps({
     detail: {
@@ -23,18 +26,24 @@ const props = defineProps({
     },
     tab: {
         type: String,
-        default: 'episodes'
+        default: 'info'
     },
     commentsScope: {
         type: String,
         default: 'episode'
+    },
+    positionMs: {
+        type: [String, Number],
+        default: 0
     }
 })
 
-const emit = defineEmits(['update:tab', 'update:commentsScope', 'select'])
+const emit = defineEmits(['update:tab', 'update:commentsScope', 'select', 'seek'])
 
 const tabs = [
+    { key: 'info', label: '简介' },
     { key: 'episodes', label: '选集' },
+    { key: 'recap', label: '看点' },
     { key: 'comments', label: '评论' },
     { key: 'companion', label: 'AI 伴看' }
 ]
@@ -68,6 +77,25 @@ function changeScope(scope) {
 
 <template>
     <aside class="feed-workspace" aria-label="剧集工作区">
+        <header class="ws-head">
+            <div class="ws-cover" aria-hidden="true">
+                <GradientCover
+                    :seed="detail.id"
+                    :title="detail.title"
+                    :src="detail.coverUrl"
+                    ratio="thumb"
+                />
+            </div>
+            <div class="ws-head-copy">
+                <span class="ws-kicker">正在播放 · 第 {{ activeEpisode?.episodeNo || 1 }} 集</span>
+                <h2 :title="detail.title">{{ detail.title }}</h2>
+                <div class="ws-meta">
+                    <span v-if="detail.category?.name" class="chip">{{ detail.category.name }}</span>
+                    <span>共 {{ episodes.length }} 集</span>
+                </div>
+            </div>
+        </header>
+
         <div class="ws-tabs" role="tablist" aria-label="工作区视图">
             <button
                 v-for="item in tabs"
@@ -84,7 +112,11 @@ function changeScope(scope) {
         </div>
 
         <div class="ws-body">
-            <div v-if="tab === 'episodes'" class="ws-pane">
+            <div v-if="tab === 'info'" class="ws-pane">
+                <DramaInfoContent :detail="detail" :show-head="false"/>
+            </div>
+
+            <div v-else-if="tab === 'episodes'" class="ws-pane">
                 <p class="ws-note">
                     共 {{ episodes.length }} 集 · 当前第 {{ activeEpisode?.episodeNo || 1 }} 集
                 </p>
@@ -93,6 +125,15 @@ function changeScope(scope) {
                     :episodes="episodes"
                     :current-id="activeEpisode?.episodeId || 0"
                     :unlocked-ids="unlockedIds"
+                    @select="emit('select', $event)"
+                />
+            </div>
+
+            <div v-else-if="tab === 'recap'" class="ws-pane">
+                <EpisodeRecap
+                    v-if="activeEpisode"
+                    :drama-id="detail.id"
+                    :episode-no="activeEpisode.episodeNo"
                     @select="emit('select', $event)"
                 />
             </div>
@@ -135,6 +176,8 @@ function changeScope(scope) {
                     :drama-title="detail.title"
                     :episode="activeEpisode"
                     :disabled="!activeUnlocked"
+                    :position-ms="positionMs"
+                    @seek="emit('seek', $event)"
                 />
             </div>
         </div>
@@ -143,25 +186,84 @@ function changeScope(scope) {
 
 <style scoped>
 .feed-workspace {
+    position: relative;
+    z-index: 1;
     display: flex;
     min-width: 0;
-    height: 100dvh;
+    height: calc(100dvh - 40px);
     flex-direction: column;
-    border-left: 1px solid var(--line);
-    background: #0b0e14;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.ws-head {
+    display: flex;
+    flex: none;
+    gap: 12px;
+    padding: 18px 18px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ws-cover {
+    flex: none;
+    width: 64px;
+    overflow: hidden;
+    border-radius: 12px;
+    box-shadow: var(--shadow-soft);
+}
+
+.ws-head-copy {
+    display: grid;
+    min-width: 0;
+    align-content: center;
+    gap: 4px;
+}
+
+.ws-kicker {
+    color: var(--brand-ink);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.ws-head-copy h2 {
+    overflow: hidden;
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.ws-meta .chip {
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 7px;
+    font-size: 10px;
 }
 
 .ws-tabs {
     display: flex;
     flex: none;
-    gap: 4px;
-    padding: 12px 14px 0;
+    gap: 2px;
+    padding: 6px 10px 0;
     border-bottom: 1px solid var(--line);
 }
 
 .ws-tab {
     flex: 1;
-    height: 40px;
+    height: 42px;
     padding: 0;
     border: none;
     border-bottom: 2px solid transparent;
@@ -169,6 +271,7 @@ function changeScope(scope) {
     color: var(--muted);
     font-size: 13px;
     font-weight: 700;
+    white-space: nowrap;
     transition: color 140ms ease, border-color 140ms ease;
 }
 
@@ -177,8 +280,8 @@ function changeScope(scope) {
 }
 
 .ws-tab.is-active {
-    border-bottom-color: var(--brand-2);
-    color: var(--brand-2);
+    border-bottom-color: var(--brand);
+    color: var(--brand-ink);
 }
 
 .ws-body {
@@ -195,7 +298,7 @@ function changeScope(scope) {
 
 .ws-note {
     margin: 0 0 10px;
-    color: rgba(255, 255, 255, 0.34);
+    color: var(--muted);
     font-size: 11px;
 }
 
@@ -227,9 +330,9 @@ function changeScope(scope) {
 }
 
 .comment-tab.is-active {
-    border-color: rgba(255, 179, 63, 0.55);
+    border-color: rgba(184, 58, 38, 0.35);
     background: var(--brand-soft);
-    color: var(--brand-2);
+    color: var(--brand-ink);
 }
 
 .ws-scroll {

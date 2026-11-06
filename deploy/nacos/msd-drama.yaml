@@ -14,6 +14,12 @@ spring:
 msd:
   kafka:
     drama-concurrency: 6
+    # 审核通过/下架后发布 RAG 增量索引事件
+    drama-changed:
+      enabled: true
+    # 字幕导入/ASR 回传后发布 transcript 索引事件
+    transcript-changed:
+      enabled: true
   interaction:
     batch-consumer:
       # 默认逐条消费；压测确认热点行瓶颈后再切 true

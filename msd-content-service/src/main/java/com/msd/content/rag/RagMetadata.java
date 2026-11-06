@@ -11,12 +11,14 @@ public final class RagMetadata {
     private RagMetadata() {
     }
 
-    /** 文档类型，drama 表示短剧文档，episode 表示分集文档。 */
+    /** 文档类型，drama 表示短剧文档，episode 表示分集文档，transcript 表示字幕片段。 */
     public static final String DOC_TYPE = "docType";
     /** 短剧文档类型值。 */
     public static final String DOC_TYPE_DRAMA = "drama";
     /** 分集文档类型值。 */
     public static final String DOC_TYPE_EPISODE = "episode";
+    /** 字幕片段文档类型值。 */
+    public static final String DOC_TYPE_TRANSCRIPT = "transcript";
 
     /** 短剧 ID。 */
     public static final String DRAMA_ID = "dramaId";
@@ -44,6 +46,14 @@ public final class RagMetadata {
     public static final String EPISODE_TITLE = "episodeTitle";
     /** 分集摘要，只描述本集已发生的内容。 */
     public static final String SUMMARY = "summary";
+    /** 解锁所需积分，0 表示免费。 */
+    public static final String PRICE_POINTS = "pricePoints";
+    /** 字幕片段开始时间（毫秒）。 */
+    public static final String START_MS = "startMs";
+    /** 字幕片段结束时间（毫秒）。 */
+    public static final String END_MS = "endMs";
+    /** 字幕片段正文，供引用展示。 */
+    public static final String TRANSCRIPT = "transcript";
     /** 短剧标题，分集文档用于展示所属短剧。 */
     public static final String DRAMA_TITLE = "dramaTitle";
     /** 播放量。 */

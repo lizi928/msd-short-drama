@@ -12,6 +12,7 @@ import java.util.List;
  * @param elapsedMs     合规审核耗时
  * @param auditedAt     审核时间
  * @param advisory      Rex 情感/标签建议；旧记录或未启用时为 null
+ * @param requestId     审核请求 ID，供审核反馈关联
  */
 public record DramaAiReviewResult(
         String scene,
@@ -20,7 +21,8 @@ public record DramaAiReviewResult(
         List<String> degradedFlags,
         long elapsedMs,
         String auditedAt,
-        DramaReviewAdvisory advisory
+        DramaReviewAdvisory advisory,
+        String requestId
 ) {
 
     /**
@@ -28,14 +30,24 @@ public record DramaAiReviewResult(
      */
     public DramaAiReviewResult {
         degradedFlags = degradedFlags == null ? List.of() : List.copyOf(degradedFlags);
+        requestId = requestId == null ? "" : requestId;
     }
 
     /**
-     * 兼容旧调用方：不携带 Rex 建议。
+     * 兼容旧调用方：不携带 Rex 建议和 requestId。
      */
     public DramaAiReviewResult(String scene, AuditVerdict verdict, boolean degraded,
                                List<String> degradedFlags, long elapsedMs, String auditedAt) {
-        this(scene, verdict, degraded, degradedFlags, elapsedMs, auditedAt, null);
+        this(scene, verdict, degraded, degradedFlags, elapsedMs, auditedAt, null, "");
+    }
+
+    /**
+     * 兼容旧调用方：携带 Rex 建议但不带 requestId。
+     */
+    public DramaAiReviewResult(String scene, AuditVerdict verdict, boolean degraded,
+                               List<String> degradedFlags, long elapsedMs, String auditedAt,
+                               DramaReviewAdvisory advisory) {
+        this(scene, verdict, degraded, degradedFlags, elapsedMs, auditedAt, advisory, "");
     }
 
     /**
@@ -43,6 +55,6 @@ public record DramaAiReviewResult(
      */
     public DramaAiReviewResult withAdvisory(DramaReviewAdvisory value) {
         return new DramaAiReviewResult(scene, verdict, degraded, degradedFlags,
-                elapsedMs, auditedAt, value);
+                elapsedMs, auditedAt, value, requestId);
     }
 }

@@ -106,10 +106,11 @@ public class DashScopeRerankPostProcessor implements DocumentPostProcessor {
                         + " " + truncate(result.body()));
             }
 
-            // 4. 按 relevance_score 降序取 topN
+            // 4. 按 relevance_score 降序取 topN；全部低于阈值时视为无匹配
             List<Document> reranked = parseResults(result.body(), safeDocuments, topN);
             if (reranked.isEmpty()) {
-                throw new RagUnavailableException("Rerank 返回空结果");
+                setFinalDocuments(trace, List.of());
+                return List.of();
             }
 
             markSuccess();
@@ -183,6 +184,9 @@ public class DashScopeRerankPostProcessor implements DocumentPostProcessor {
     private List<Document> parseResults(String body, List<Document> documents, int topN) {
         JsonNode root = jsonMapper.readTree(body);
         JsonNode results = root.path("output").path("results");
+        if (results.size() == 0) {
+            throw new RagUnavailableException("Rerank 返回空结果");
+        }
 
         // 1. 读取返回的 index 和 relevance_score，过滤越界和重复项
         List<RankedDocument> ranked = new ArrayList<>();
@@ -190,7 +194,8 @@ public class DashScopeRerankPostProcessor implements DocumentPostProcessor {
         for (JsonNode item : results) {
             int index = item.path("index").asInt(-1);
             double score = item.path("relevance_score").asDouble(0.0);
-            if (index < 0 || index >= documents.size() || !seen.add(index)) {
+            if (index < 0 || index >= documents.size() || !seen.add(index)
+                    || score < properties.getRerank().getMinScore()) {
                 continue;
             }
             ranked.add(new RankedDocument(index, score));

@@ -171,3 +171,27 @@ export function clearHistory() {
 export function fetchStats() {
     return request(`${BASE}/stats`)
 }
+
+/**
+ * 上报推荐行为：1 点击，2 播放，3 完播，4 不感兴趣。
+ *
+ * @param {{requestId: string, dramaId: number, eventType: number,
+ *   position?: number}} payload 归因事件
+ */
+export function trackRecommendationEvent(payload) {
+    return request('/api/interaction/internal/recommendations/events', {
+        method: 'POST',
+        body: payload
+    })
+}
+
+/**
+ * 查询评论课代表。
+ *
+ * @param {{dramaId: number, episodeId?: number}} params 短剧和剧集
+ */
+export function fetchCommentSummary({ dramaId, episodeId }) {
+    return request('/api/interaction/internal/ai/comments/summary', {
+        query: { dramaId, episodeId }
+    })
+}

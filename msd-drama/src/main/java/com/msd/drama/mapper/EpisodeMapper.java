@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.msd.drama.dto.CompanionEpisodeRow;
 import com.msd.drama.dto.DramaEpisodeTitleRow;
 import com.msd.drama.dto.EpisodeSourceRow;
+import com.msd.drama.dto.TranscriptEpisodeRow;
 import com.msd.drama.entity.DramaEpisode;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
@@ -71,7 +72,7 @@ public interface EpisodeMapper extends BaseMapper<DramaEpisode> {
      */
     @Select("""
             <script>
-            SELECT id AS episode_id, drama_id, episode_no, title, summary
+            SELECT id AS episode_id, drama_id, episode_no, title, summary, price_points
             FROM t_drama_episode
             WHERE status = 1
               AND drama_id IN
@@ -82,6 +83,72 @@ public interface EpisodeMapper extends BaseMapper<DramaEpisode> {
     List<DramaEpisodeTitleRow> selectOnlineEpisodeTitlesByDramaIds(@Param("dramaIds") List<Long> dramaIds);
 
     /**
+     * 统计有可见字幕的在线剧集数。
+     */
+    @Select("""
+            SELECT COUNT(DISTINCT e.id)
+            FROM t_episode_subtitle sub
+            JOIN t_episode_transcript_segment ts ON ts.subtitle_id = sub.id AND ts.status = 1
+            JOIN t_drama_episode e ON e.id = sub.episode_id
+            JOIN t_drama d ON d.id = e.drama_id
+            WHERE sub.status = 1
+              AND e.status = 1
+              AND d.deleted = 0
+              AND d.review_status = 2
+              AND d.publish_time IS NOT NULL
+            """)
+    long countTranscriptEpisodes();
+
+    /**
+     * 分页查询有可见字幕的在线剧集 ID，供全量重建字幕索引。
+     */
+    @Select("""
+            SELECT DISTINCT e.id
+            FROM t_episode_subtitle sub
+            JOIN t_episode_transcript_segment ts ON ts.subtitle_id = sub.id AND ts.status = 1
+            JOIN t_drama_episode e ON e.id = sub.episode_id
+            JOIN t_drama d ON d.id = e.drama_id
+            WHERE sub.status = 1
+              AND e.status = 1
+              AND d.deleted = 0
+              AND d.review_status = 2
+              AND d.publish_time IS NOT NULL
+            ORDER BY e.id
+            LIMIT #{limit} OFFSET #{offset}
+            """)
+    List<Long> selectTranscriptEpisodeIds(@Param("offset") int offset,
+                                          @Param("limit") int limit);
+
+    /**
+     * 查询某部短剧下有可见字幕的剧集 ID，供审核通过后补发字幕索引事件。
+     */
+    @Select("""
+            SELECT DISTINCT sub.episode_id
+            FROM t_episode_subtitle sub
+            JOIN t_episode_transcript_segment ts ON ts.subtitle_id = sub.id AND ts.status = 1
+            WHERE sub.status = 1 AND sub.episode_id IN (
+                SELECT id FROM t_drama_episode WHERE drama_id = #{dramaId}
+            )
+            """)
+    List<Long> selectEpisodeIdsWithTranscript(@Param("dramaId") Long dramaId);
+
+    /**
+     * 查询字幕导出所需的可见剧集信息；剧集或短剧不可见时返回 null。
+     */
+    @Select("""
+            SELECT e.id AS episode_id, e.drama_id, d.title AS drama_title,
+                   e.episode_no, e.title AS episode_title, e.price_points
+            FROM t_drama_episode e
+            JOIN t_drama d ON d.id = e.drama_id
+            WHERE e.id = #{episodeId}
+              AND e.status = 1
+              AND d.deleted = 0
+              AND d.review_status = 2
+              AND d.publish_time IS NOT NULL
+            """)
+    TranscriptEpisodeRow selectTranscriptEpisode(@Param("episodeId") Long episodeId);
+
+    /**
      * 查询 AI 伴看所需的剧集元信息。
      *
      * <p>可见性条件与播放源一致：剧集在线、短剧未删除、已通过审核且已上架。</p>
@@ -89,7 +156,7 @@ public interface EpisodeMapper extends BaseMapper<DramaEpisode> {
     @Select("""
             SELECT e.id AS episode_id, e.drama_id, d.title AS drama_title,
                    e.episode_no, e.title AS episode_title, e.summary, e.summary_status,
-                   d.description AS drama_description
+                   d.description AS drama_description, e.price_points
             FROM t_drama_episode e
             JOIN t_drama d ON d.id = e.drama_id
             WHERE e.id = #{episodeId}
@@ -99,6 +166,27 @@ public interface EpisodeMapper extends BaseMapper<DramaEpisode> {
               AND d.publish_time IS NOT NULL
             """)
     CompanionEpisodeRow selectCompanionEpisodeById(@Param("episodeId") Long episodeId);
+
+    /**
+     * 查询前情提要所需的在线分集摘要，只返回当前集及之前。
+     *
+     * <p>可见性条件与播放源一致，防止已下架短剧的摘要继续外泄。</p>
+     */
+    @Select("""
+            SELECT e.id AS episode_id, e.drama_id, e.episode_no, e.title, e.summary,
+                   e.summary_status, e.price_points
+            FROM t_drama_episode e
+            JOIN t_drama d ON d.id = e.drama_id
+            WHERE e.drama_id = #{dramaId}
+              AND e.status = 1
+              AND e.episode_no <= #{episodeNo}
+              AND d.deleted = 0
+              AND d.review_status = 2
+              AND d.publish_time IS NOT NULL
+            ORDER BY e.episode_no
+            """)
+    List<DramaEpisodeTitleRow> selectRecapEpisodes(@Param("dramaId") Long dramaId,
+                                                   @Param("episodeNo") Integer episodeNo);
 
     /**
      * 查询可生成摘要的在线剧集 ID。

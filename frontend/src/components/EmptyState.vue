@@ -53,8 +53,8 @@ defineEmits(['action'])
     margin-bottom: 4px;
     border: 1px solid var(--line);
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.03);
-    color: var(--brand-2);
+    background: var(--surface-muted);
+    color: var(--brand-ink);
 }
 
 .empty-icon svg {

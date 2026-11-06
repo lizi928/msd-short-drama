@@ -23,6 +23,8 @@ public class CompanionEpisodeRow {
     private Integer summaryStatus;
     // 短剧简介，用于生成摘要提示
     private String dramaDescription;
+    // 解锁所需积分，0 表示免费
+    private Integer pricePoints;
 
     /**
      * 获取剧集 ID。
@@ -134,5 +136,19 @@ public class CompanionEpisodeRow {
      */
     public void setDramaDescription(String dramaDescription) {
         this.dramaDescription = dramaDescription;
+    }
+
+    /**
+     * 获取解锁所需积分。
+     */
+    public Integer getPricePoints() {
+        return pricePoints;
+    }
+
+    /**
+     * 设置解锁所需积分。
+     */
+    public void setPricePoints(Integer pricePoints) {
+        this.pricePoints = pricePoints;
     }
 }

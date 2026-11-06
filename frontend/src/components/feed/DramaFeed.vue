@@ -1,11 +1,12 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { fetchDramaDetail, fetchDramaStats } from '../../api/drama'
 import {
     favoriteDrama,
     fetchDramaState,
     likeTarget,
+    trackRecommendationEvent,
     unfavoriteDrama,
     unlikeTarget
 } from '../../api/interaction'
@@ -17,11 +18,11 @@ import { useToastStore } from '../../stores/toast'
 import AppModal from '../AppModal.vue'
 import CommentSection from '../comments/CommentSection.vue'
 import CompanionPanel from '../companion/CompanionPanel.vue'
+import EpisodeRecap from '../companion/EpisodeRecap.vue'
 import ErrorState from '../ErrorState.vue'
 import DramaInfoSheet from './DramaInfoSheet.vue'
 import EpisodeSheet from './EpisodeSheet.vue'
 import FeedEndSlide from './FeedEndSlide.vue'
-import FeedInfoPanel from './FeedInfoPanel.vue'
 import FeedSlide from './FeedSlide.vue'
 import FeedWorkspace from './FeedWorkspace.vue'
 
@@ -44,6 +45,7 @@ const props = defineProps({
     }
 })
 
+const route = useRoute()
 const router = useRouter()
 const toast = useToastStore()
 
@@ -64,12 +66,15 @@ const infoOpen = ref(false)
 const episodesOpen = ref(false)
 const commentsOpen = ref(false)
 const companionOpen = ref(false)
+const recapOpen = ref(false)
 const commentsScope = ref('episode')
-const workspaceTab = ref('episodes')
+const workspaceTab = ref('info')
+const activePositionMs = ref(0)
+const seekRequest = ref(null)
+let seekSequence = 0
 
-// 1. 桌面端断点：1024 起显示右侧工作区，1280 起额外显示左侧信息栏
+// 1. 桌面端断点：1024 起剧场居中，右侧常驻信息/工作区
 const isDesktop = useMediaQuery('(min-width: 1024px)')
-const isWide = useMediaQuery('(min-width: 1280px)')
 
 const pending = reactive({ like: false, favorite: false })
 const likeAckId = ref('')
@@ -94,9 +99,48 @@ const indicator = computed(() => {
         : `${total}/${total}`
 })
 const suspended = computed(() => (
-    infoOpen.value || episodesOpen.value || commentsOpen.value || companionOpen.value
+    infoOpen.value || episodesOpen.value || commentsOpen.value
+    || companionOpen.value || recapOpen.value
 ))
 const reactionsEnabled = computed(() => Boolean(state.value))
+const recommendationContext = computed(() => {
+    const requestId = typeof route.query.rec_request === 'string'
+        ? route.query.rec_request : ''
+    const dramaId = Number(route.query.rec_drama)
+    if (!requestId || dramaId !== Number(props.dramaId)) {
+        return null
+    }
+    return {
+        requestId,
+        dramaId,
+        position: Number(route.query.rec_pos) || 0
+    }
+})
+
+/**
+ * 上报推荐播放/完播；没有推荐上下文时静默跳过。
+ */
+function reportRecommendation(eventType) {
+    const context = recommendationContext.value
+    if (!context) {
+        return
+    }
+    trackRecommendationEvent({
+        requestId: context.requestId,
+        dramaId: context.dramaId,
+        eventType,
+        position: context.position
+    }).catch(() => {
+        // 归因失败不影响播放
+    })
+}
+
+/**
+ * 当前短剧播放完成。
+ */
+function onRecommendationFinish() {
+    reportRecommendation(3)
+}
 
 function resolveInitialIndex() {
     const target = Number(props.initialEpisodeId)
@@ -170,6 +214,7 @@ async function load() {
     initialSlideIndex.value = resolveInitialIndex()
     activeIndex.value = initialSlideIndex.value
     loading.value = false
+    reportRecommendation(2)
 
     await nextTick()
     setupScroller()
@@ -290,6 +335,51 @@ function replayFirst() {
     scrollToIndex(0)
 }
 
+function onRecapSelect(episodeId) {
+    recapOpen.value = false
+    selectEpisode(episodeId)
+}
+
+/**
+ * 记录当前集播放位置，供伴看字幕防剧透过滤。
+ */
+function onSlideProgress(payload) {
+    if (!payload || !activeEpisode.value) {
+        return
+    }
+    if (Number(payload.episodeId) !== Number(activeEpisode.value.episodeId)) {
+        return
+    }
+    activePositionMs.value = Math.max(0, Number(payload.positionMs) || 0)
+}
+
+/**
+ * 点击伴看字幕引用：切到目标集并请求 seek。
+ */
+function onCompanionSeek(payload) {
+    const episodeId = Number(payload?.episodeId)
+    if (!episodeId) {
+        return
+    }
+    const index = episodes.value.findIndex((episode) => Number(episode.episodeId) === episodeId)
+    if (index < 0) {
+        return
+    }
+    if (index !== activeIndex.value) {
+        selectEpisode(episodeId)
+    }
+    seekSequence += 1
+    seekRequest.value = {
+        episodeId,
+        positionMs: Math.max(0, Number(payload.positionMs) || 0),
+        nonce: seekSequence
+    }
+}
+
+watch(activeIndex, () => {
+    activePositionMs.value = 0
+})
+
 function selectEpisode(episodeId) {
     const index = episodes.value.findIndex((episode) => Number(episode.episodeId) === Number(episodeId))
     if (index < 0) {
@@ -305,10 +395,11 @@ function selectEpisode(episodeId) {
 }
 
 /**
- * 简介入口：宽屏已有左侧信息栏，不再弹层；1024 和移动端打开弹层。
+ * 简介入口：桌面切右侧工作区简介标签，移动端打开底部弹层。
  */
 function openInfo() {
-    if (isWide.value) {
+    if (isDesktop.value) {
+        workspaceTab.value = 'info'
         return
     }
     infoOpen.value = true
@@ -323,6 +414,20 @@ function openEpisodes() {
         return
     }
     episodesOpen.value = true
+}
+
+/**
+ * 前情提要入口：桌面切工作区标签，移动端打开底部弹层。
+ */
+function openRecap() {
+    if (!activeEpisode.value) {
+        return
+    }
+    if (isDesktop.value) {
+        workspaceTab.value = 'recap'
+        return
+    }
+    recapOpen.value = true
 }
 
 function openComments() {
@@ -524,9 +629,12 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="feed-shell" :class="{ 'has-workspace': isDesktop }">
-        <FeedInfoPanel v-if="isWide && detail" :detail="detail"/>
+        <div v-if="isDesktop && detail" class="feed-ambient" aria-hidden="true">
+            <img v-if="detail.coverUrl" class="feed-ambient-img" :src="detail.coverUrl" alt="">
+            <span class="feed-ambient-veil"></span>
+        </div>
 
-        <div class="feed-stage">
+        <div class="feed-stage" :class="{ 'is-desktop': isDesktop }">
         <header class="feed-top">
             <button class="feed-back" type="button" aria-label="返回" @click="goBack">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -584,9 +692,13 @@ onBeforeUnmount(() => {
                             && Number(initialPlayback.episodeId) === Number(episode.episodeId)
                             ? initialPlayback
                             : null"
+                        :seek-request="seekRequest"
+                        @progress="onSlideProgress"
                         @like="toggleLike"
                         @favorite="toggleFavorite"
                         @comments="openComments"
+                        @recap="openRecap"
+                        @finished="onRecommendationFinish"
                         @companion="openCompanion"
                         @info="openInfo"
                         @episodes="openEpisodes"
@@ -618,13 +730,15 @@ onBeforeUnmount(() => {
             :episodes="episodes"
             :active-episode="activeEpisode"
             :unlocked-ids="unlockedIds"
+            :position-ms="activePositionMs"
             @update:tab="workspaceTab = $event"
             @update:comments-scope="commentsScope = $event"
             @select="selectEpisode"
+            @seek="onCompanionSeek"
         />
 
         <template v-if="detail">
-            <DramaInfoSheet v-if="!isWide" v-model="infoOpen" :detail="detail"/>
+            <DramaInfoSheet v-if="!isDesktop" v-model="infoOpen" :detail="detail"/>
 
             <template v-if="!isDesktop">
             <EpisodeSheet
@@ -669,7 +783,18 @@ onBeforeUnmount(() => {
                 :drama-id="detail.id"
                 :drama-title="detail.title"
                 :episode="activeEpisode"
+                :position-ms="activePositionMs"
+                @seek="onCompanionSeek"
             />
+
+            <AppModal v-model="recapOpen" title="前情提要">
+                <EpisodeRecap
+                    v-if="activeEpisode"
+                    :drama-id="detail.id"
+                    :episode-no="activeEpisode.episodeNo"
+                    @select="onRecapSelect"
+                />
+            </AppModal>
             </template>
         </template>
     </div>
@@ -688,11 +813,17 @@ onBeforeUnmount(() => {
     transform: translateX(-50%);
 }
 
-/* 移动端 stage 铺满整个壳；桌面端收窄成竖屏播放列 */
+/* 移动端 stage 铺满整个壳；桌面端收窄成 9:16 剧场卡 */
 .feed-stage {
     position: relative;
     height: 100%;
     overflow: hidden;
+    background: var(--media-bg);
+}
+
+/* 桌面端封面氛围层：模糊封面 + 奶白薄纱，移动端不渲染 */
+.feed-ambient {
+    display: none;
 }
 
 .feed-top {
@@ -780,7 +911,7 @@ onBeforeUnmount(() => {
     justify-items: center;
     gap: 10px;
     padding: 80px 20px;
-    color: var(--muted);
+    color: var(--on-media-muted);
     font-size: 12px;
 }
 
@@ -788,7 +919,7 @@ onBeforeUnmount(() => {
     width: 28px;
     height: 28px;
     border: 2px solid rgba(255, 255, 255, 0.2);
-    border-top-color: var(--brand-2);
+    border-top-color: var(--brand-2-bright);
     border-radius: 50%;
     animation: feed-spin 800ms linear infinite;
 }
@@ -802,7 +933,7 @@ onBeforeUnmount(() => {
     padding: 8px 10px;
     border-radius: 9px;
     background: rgba(0, 0, 0, 0.6);
-    color: var(--brand-2);
+    color: var(--brand-2-bright);
     font-size: 10px;
     text-align: center;
 }
@@ -828,53 +959,75 @@ onBeforeUnmount(() => {
 }
 
 .comment-tab.is-active {
-    border-color: rgba(255, 179, 63, 0.55);
+    border-color: rgba(184, 58, 38, 0.35);
     background: var(--brand-soft);
-    color: var(--brand-2);
+    color: var(--brand-ink);
 }
 
-/* ---------- 桌面端（≥1024）：竖屏 Feed + 右侧工作区 ---------- */
+/* ---------- 桌面端（≥1024）：宽屏剧场 + 右侧信息栏 ---------- */
 
 @media (min-width: 1024px) {
     .feed-shell {
         display: grid;
-        width: 100%;
-        max-width: 1320px;
+        width: calc(100% - var(--sidebar-width));
+        max-width: none;
         grid-template-columns: minmax(0, 1fr) var(--feed-workspace-width);
-        background: #05070a;
+        gap: clamp(16px, 2vw, 32px);
+        padding: 20px clamp(16px, 2vw, 32px);
+        left: var(--sidebar-width);
+        background: transparent;
+        transform: none;
+    }
+
+    .feed-ambient {
+        position: absolute;
+        inset: 0;
+        display: block;
+        overflow: hidden;
+        pointer-events: none;
+    }
+
+    .feed-ambient-img {
+        position: absolute;
+        inset: -8%;
+        width: 116%;
+        height: 116%;
+        object-fit: cover;
+        filter: blur(48px) saturate(0.85);
+        opacity: 0.5;
+        transform: scale(1.05);
+    }
+
+    .feed-ambient-veil {
+        position: absolute;
+        inset: 0;
+        background:
+            radial-gradient(900px 620px at 10% -10%, rgba(47, 174, 122, 0.18), transparent 62%),
+            radial-gradient(760px 520px at 96% 4%, rgba(255, 107, 74, 0.14), transparent 58%),
+            linear-gradient(180deg, rgba(244, 251, 247, 0.86), rgba(244, 251, 247, 0.93));
     }
 
     .feed-stage {
         grid-column: 1;
-        width: min(480px, 100%);
-        height: 100dvh;
-        margin: 0 auto;
-        background: #000;
-        box-shadow: 0 0 70px rgba(0, 0, 0, 0.55);
+        align-self: center;
+        justify-self: center;
+        width: min(var(--feed-stage-max), calc((100dvh - 40px) * 9 / 16), 100%);
+        height: auto;
+        aspect-ratio: 9 / 16;
+        max-height: calc(100dvh - 40px);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-media);
+        isolation: isolate;
     }
 
     .feed-workspace {
         grid-column: 2;
-    }
-}
-
-/* ---------- 宽屏（≥1280）：左侧信息栏 + 中间 Feed + 右侧工作区 ---------- */
-
-@media (min-width: 1280px) {
-    .feed-shell {
-        grid-template-columns: var(--feed-info-width) minmax(0, 1fr) var(--feed-workspace-width);
+        align-self: center;
     }
 
-    .feed-info-panel {
-        grid-column: 1;
-    }
-
-    .feed-stage {
-        grid-column: 2;
-    }
-
-    .feed-workspace {
-        grid-column: 3;
+    /* 桌面端右侧已有选集入口，隐藏视频内的“上滑继续” */
+    .feed-stage.is-desktop :deep(.feed-finish-hint) {
+        display: none;
     }
 }
 

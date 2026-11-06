@@ -7,6 +7,7 @@ import com.msd.common.result.Result;
 import com.msd.content.client.DramaCatalogClient;
 import com.msd.content.config.RagProperties;
 import com.msd.content.dto.ReindexResult;
+import com.msd.content.dto.TranscriptReindexResult;
 import com.msd.content.rag.Bm25IndexStore;
 import com.msd.content.support.LazyMilvusStoreProvider;
 import com.msd.content.support.RagConflictException;
@@ -56,6 +57,8 @@ public class DramaIndexService {
     private final RagProperties properties;
     // 最近一次索引状态
     private final RagIndexState indexState;
+    // 字幕索引服务，全量重建后补建 transcript
+    private final TranscriptIndexService transcriptIndexService;
 
     // 全量重建互斥锁
     private final ReentrantLock lock = new ReentrantLock();
@@ -71,13 +74,15 @@ public class DramaIndexService {
                              LazyMilvusStoreProvider milvusProvider,
                              ObjectProvider<Bm25IndexStore> bm25StoreProvider,
                              RagProperties properties,
-                             RagIndexState indexState) {
+                             RagIndexState indexState,
+                             TranscriptIndexService transcriptIndexService) {
         this.catalogClient = catalogClient;
         this.documentBuilder = documentBuilder;
         this.milvusProvider = milvusProvider;
         this.bm25StoreProvider = bm25StoreProvider;
         this.properties = properties;
         this.indexState = indexState;
+        this.transcriptIndexService = transcriptIndexService;
     }
 
     /**
@@ -116,7 +121,11 @@ public class DramaIndexService {
                 errors.add("bm25: " + bm25.error());
             }
 
-            boolean partial = !vector.available() || !bm25.available();
+            // 5. 全量重建会重建 ES index，必须补建字幕索引；单集失败只标记 partial
+            rebuildTranscripts(errors);
+
+            boolean partial = !vector.available() || !bm25.available()
+                    || !errors.isEmpty();
             ReindexResult result = new ReindexResult(
                     dramas.size(),
                     episodeCount,
@@ -275,6 +284,23 @@ public class DramaIndexService {
             String message = truncateError(rootMessage(e));
             log.warn("rag bm25 reindex failed: {}", message);
             return new Bm25Outcome(false, 0, message);
+        }
+    }
+
+    /**
+     * 补建字幕索引；列表或单集失败都写入 errors，不中断主索引结果。
+     */
+    private TranscriptReindexResult rebuildTranscripts(List<String> errors) {
+        try {
+            TranscriptReindexResult result = transcriptIndexService.reindexAll();
+            if (result.failed() > 0) {
+                errors.add("transcript: failed=" + result.failed()
+                        + ", " + String.join("; ", result.errors()));
+            }
+            return result;
+        } catch (Exception e) {
+            errors.add("transcript: " + truncateError(rootMessage(e)));
+            return new TranscriptReindexResult(0, 0, List.of());
         }
     }
 

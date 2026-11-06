@@ -56,6 +56,22 @@ class DramaAiReviewResultTest {
     }
 
     /**
+     * 新结果写入 requestId，供审核反馈关联。
+     */
+    @Test
+    void persistsRequestId() {
+        DramaAiReviewResult result = new DramaAiReviewResult(
+                "drama_description", new AuditVerdict(false, "", List.of()),
+                false, List.of(), 1200, "2026-10-27T12:00:00+08:00", null,
+                "audit-request-1");
+
+        String json = jsonMapper.writeValueAsString(result);
+        DramaAiReviewResult parsed = jsonMapper.readValue(json, DramaAiReviewResult.class);
+
+        assertThat(parsed.requestId()).isEqualTo("audit-request-1");
+    }
+
+    /**
      * withAdvisory(null) 可从结果中移除建议。
      */
     @Test

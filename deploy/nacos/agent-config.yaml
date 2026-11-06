@@ -40,6 +40,21 @@ msd:
             keywords: [前情, 剧情, 人物关系, 剧透, 结局, 反转, 当前集, 这一集]
             patterns:
               - '第\s*[0-9一二三四五六七八九十]+\s*集'
+          - name: search-keyword
+            route: SEARCH
+            agent: search-agent
+            weight: 0.86
+            priority: 50
+            keywords: [找剧, 剧荒, 搜剧, 什么剧, 推荐一部, 想看一部]
+            patterns:
+              - '找.{0,6}剧|有没有.{0,8}(剧|短剧)|推荐.{0,6}剧|类似.{0,6}剧'
+          - name: recommend-keyword
+            route: RECOMMEND
+            agent: search-agent
+            weight: 0.8
+            priority: 45
+            keywords: [推荐, 类似, 同类型, 先婚后爱, 甜宠, 悬疑]
+            patterns: []
           - name: audit-keyword
             route: AUDIT
             agent: audit-agent
@@ -71,6 +86,7 @@ msd:
           - list_drama_episodes
           - get_episode_summary
           - search_drama_context
+          - search_drama_rag
           - audit_remote
         max-text-length: 5000
         max-query-length: 500

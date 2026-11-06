@@ -46,22 +46,26 @@ public class UserPreferenceService {
     private final JsonMapper jsonMapper;
     // RAG 配置
     private final RagProperties properties;
+    // 冷启动偏好
+    private final ColdStartPreferenceService coldStartPreferenceService;
     // Redis 失败后的退避截止时间
     private volatile long redisUnavailableUntil;
 
     /**
-     * 注入行为、目录、缓存和配置。
+     * 注入行为、目录、缓存、配置和冷启动偏好。
      */
     public UserPreferenceService(UserBehaviorClient behaviorClient,
                                  DramaCatalogCacheService catalogCache,
                                  @Lazy RedissonClient redissonClient,
                                  JsonMapper jsonMapper,
-                                 RagProperties properties) {
+                                 RagProperties properties,
+                                 ColdStartPreferenceService coldStartPreferenceService) {
         this.behaviorClient = behaviorClient;
         this.catalogCache = catalogCache;
         this.redissonClient = redissonClient;
         this.jsonMapper = jsonMapper;
         this.properties = properties;
+        this.coldStartPreferenceService = coldStartPreferenceService;
     }
 
     /**
@@ -106,8 +110,25 @@ public class UserPreferenceService {
             return UserPreference.empty(true);
         }
         UserBehaviorDTO behavior = behaviorResult.getData();
+        List<UserPreference.DramaWeight> coOccurrence = toCoOccurrence(behavior);
         if (behavior.weights() == null || behavior.weights().isEmpty()) {
-            return UserPreference.empty(false);
+            // 新用户没有行为时，优先使用冷启动选择的分类；继续观看/共现仍保留
+            List<Long> coldCategories = coldStartPreferenceService.get(userId);
+            List<UserPreference.CategoryWeight> categories = coldCategories.stream()
+                    .map(id -> new UserPreference.CategoryWeight(id, "", 1.0))
+                    .toList();
+            List<Long> continueIds = behavior.continueDramaIds() == null
+                    ? List.of() : behavior.continueDramaIds();
+            List<Long> recent = behavior.recentDramaIds() == null
+                    ? List.of() : behavior.recentDramaIds();
+            List<Long> favorites = behavior.favoriteDramaIds() == null
+                    ? List.of() : behavior.favoriteDramaIds();
+            List<Long> disliked = behavior.dislikedDramaIds() == null
+                    ? List.of() : behavior.dislikedDramaIds();
+            boolean empty = categories.isEmpty() && continueIds.isEmpty()
+                    && coOccurrence.isEmpty();
+            return new UserPreference(categories, List.of(), recent, favorites,
+                    continueIds, coOccurrence, disliked, empty, false);
         }
 
         // 2. 拉取目录；目录为空时无法映射分类/标签
@@ -162,15 +183,36 @@ public class UserPreferenceService {
                 .map(entry -> new UserPreference.TagWeight(entry.getKey(), entry.getValue()))
                 .toList();
 
-        // 5. 空画像表示冷启动，而不是依赖失败
-        boolean empty = categories.isEmpty() && tags.isEmpty();
+        // 5. 空画像表示冷启动，而不是依赖失败；继续观看/共现/负反馈继续透传
+        boolean empty = categories.isEmpty() && tags.isEmpty()
+                && (behavior.continueDramaIds() == null || behavior.continueDramaIds().isEmpty())
+                && (behavior.coOccurrenceDramas() == null || behavior.coOccurrenceDramas().isEmpty());
         return new UserPreference(
                 categories,
                 tags,
                 behavior.recentDramaIds() == null ? List.of() : behavior.recentDramaIds(),
                 behavior.favoriteDramaIds() == null ? List.of() : behavior.favoriteDramaIds(),
+                behavior.continueDramaIds() == null ? List.of() : behavior.continueDramaIds(),
+                List.copyOf(coOccurrence),
+                behavior.dislikedDramaIds() == null ? List.of() : behavior.dislikedDramaIds(),
                 empty,
                 false);
+    }
+
+    /**
+     * 共同观看召回转内部类型。
+     */
+    private List<UserPreference.DramaWeight> toCoOccurrence(UserBehaviorDTO behavior) {
+        List<UserPreference.DramaWeight> coOccurrence = new ArrayList<>();
+        if (behavior.coOccurrenceDramas() != null) {
+            for (UserBehaviorDTO.DramaWeight item : behavior.coOccurrenceDramas()) {
+                if (item != null && item.dramaId() != null && item.dramaId() > 0) {
+                    coOccurrence.add(new UserPreference.DramaWeight(
+                            item.dramaId(), item.weight()));
+                }
+            }
+        }
+        return List.copyOf(coOccurrence);
     }
 
     /**

@@ -104,8 +104,8 @@ onBeforeUnmount(() => {
 .modal-backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.62);
-    backdrop-filter: blur(3px);
+    background: rgba(22, 33, 26, 0.38);
+    backdrop-filter: blur(4px);
 }
 
 .modal-panel {

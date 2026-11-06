@@ -70,7 +70,7 @@ function submitSearch() {
     top: 0;
     z-index: 50;
     border-bottom: 1px solid var(--line);
-    background: rgba(9, 11, 16, 0.86);
+    background: rgba(255, 255, 255, 0.84);
     backdrop-filter: blur(18px);
 }
 
@@ -108,16 +108,16 @@ function submitSearch() {
     width: 280px;
     height: 38px;
     padding: 0 12px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-strong);
     border-radius: 10px;
-    background: rgba(0, 0, 0, 0.26);
+    background: var(--surface);
     color: var(--muted);
     transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .topbar-search:focus-within {
-    border-color: rgba(255, 179, 63, 0.6);
-    box-shadow: 0 0 0 3px rgba(255, 179, 63, 0.1);
+    border-color: rgba(184, 58, 38, 0.5);
+    box-shadow: 0 0 0 3px rgba(184, 58, 38, 0.1);
 }
 
 .topbar-search svg {
@@ -137,7 +137,7 @@ function submitSearch() {
 }
 
 .topbar-search input::placeholder {
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--muted-soft);
 }
 
 .topbar-search input::-webkit-search-cancel-button {

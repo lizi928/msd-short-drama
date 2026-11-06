@@ -4,6 +4,7 @@ import com.msd.content.config.RagProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.deepseek.DeepSeekChatOptions;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.preretrieval.query.transformation.QueryTransformer;
 
@@ -80,10 +81,19 @@ public class LlmQueryTransformer implements QueryTransformer {
 
         CompletableFuture<String> future = null;
         try {
-            // 3. 独立线程池 + 超时，避免改写拖垮整条 RAG 链路
+            // 3. 实验命中时用轻量模型改写，否则沿用默认模型
+            ChatClient.ChatClientRequestSpec requestSpec = rewriteChatClient.prompt()
+                    .user(original);
+            if (trace != null && trace.getRewriteModel() != null
+                    && !trace.getRewriteModel().isBlank()) {
+                requestSpec = requestSpec.options(DeepSeekChatOptions.builder()
+                        .model(trace.getRewriteModel())
+                        .temperature(0.1));
+            }
+            ChatClient.ChatClientRequestSpec effectiveSpec = requestSpec;
+            // 4. 独立线程池 + 超时，避免改写拖垮整条 RAG 链路
             future = CompletableFuture.supplyAsync(
-                    () -> rewriteChatClient.prompt().user(original).call().content(),
-                    rewriteExecutor);
+                    () -> effectiveSpec.call().content(), rewriteExecutor);
             String rewritten = clean(future.get(properties.getRewrite().getTimeoutMs(),
                     TimeUnit.MILLISECONDS));
 

@@ -157,6 +157,94 @@ public class ElasticsearchBm25Store implements Bm25IndexStore {
     }
 
     /**
+     * 按 dramaId 删除短剧文档和分集文档。
+     *
+     * <p>使用 _delete_by_query 并强制刷新，保证下架后立即不可检索。</p>
+     */
+    @Override
+    public int deleteByDrama(Long dramaId) {
+        // 1. 关闭或参数非法时无需处理
+        if (!properties.getBm25().isEnabled() || dramaId == null || dramaId <= 0) {
+            return 0;
+        }
+        // 2. 按 dramaId 过滤删除；索引不存在时视为已删除
+        ObjectNode root = jsonMapper.createObjectNode();
+        root.putObject("query").putObject("term").put(RagMetadata.DRAMA_ID, dramaId);
+        HttpResult result = JsonHttpSupport.send(
+                httpClient, "POST",
+                indexUrl() + "/_delete_by_query?conflicts=proceed&refresh=true",
+                jsonMapper.writeValueAsString(root), writeTimeoutMs());
+        if (result.status() == 404) {
+            return 0;
+        }
+        if (!result.successful()) {
+            failAndThrow("删除短剧 " + dramaId + " 的 ES 文档失败", result);
+        }
+        markSuccess();
+        return jsonMapper.readTree(result.body()).path("deleted").asInt(0);
+    }
+
+    /**
+     * 删除某集的全部字幕片段文档。
+     */
+    @Override
+    public int deleteTranscriptsByEpisode(Long episodeId) {
+        if (!properties.getBm25().isEnabled() || episodeId == null || episodeId <= 0) {
+            return 0;
+        }
+        ObjectNode root = jsonMapper.createObjectNode();
+        ArrayNode filter = root.putObject("query").putObject("bool").putArray("filter");
+        filter.add(termFilter(RagMetadata.DOC_TYPE, RagMetadata.DOC_TYPE_TRANSCRIPT));
+        filter.add(termFilter(RagMetadata.EPISODE_ID, episodeId));
+        HttpResult result = JsonHttpSupport.send(
+                httpClient, "POST",
+                indexUrl() + "/_delete_by_query?conflicts=proceed&refresh=true",
+                jsonMapper.writeValueAsString(root), writeTimeoutMs());
+        if (result.status() == 404) {
+            return 0;
+        }
+        if (!result.successful()) {
+            failAndThrow("删除剧集 " + episodeId + " 的字幕文档失败", result);
+        }
+        markSuccess();
+        return jsonMapper.readTree(result.body()).path("deleted").asInt(0);
+    }
+
+    /**
+     * 写入单集字幕片段，调用方随后刷新索引。
+     */
+    @Override
+    public int upsertTranscripts(List<Document> documents) {
+        if (!properties.getBm25().isEnabled() || documents == null || documents.isEmpty()) {
+            return 0;
+        }
+        int indexed = 0;
+        for (Document document : documents) {
+            if (document == null || document.getId() == null) {
+                continue;
+            }
+            indexed += putDocument(document.getId(), transcriptSourceJson(document));
+        }
+        markSuccess();
+        return indexed;
+    }
+
+    /**
+     * 检索字幕片段，只返回指定短剧当前集及之前的内容。
+     */
+    @Override
+    public List<Document> searchTranscripts(String queryText, Long dramaId,
+                                            Integer maxEpisodeNo, int topK) {
+        if (dramaId == null || maxEpisodeNo == null || maxEpisodeNo <= 0) {
+            return List.of();
+        }
+        return search(queryText, Math.max(topK, 1), List.of(
+                termFilter(RagMetadata.DOC_TYPE, RagMetadata.DOC_TYPE_TRANSCRIPT),
+                termFilter(RagMetadata.DRAMA_ID, dramaId),
+                rangeAtMost(RagMetadata.EPISODE_NO, maxEpisodeNo)));
+    }
+
+    /**
      * 刷新索引，保证重建后立即可查。
      */
     @Override
@@ -344,6 +432,10 @@ public class ElasticsearchBm25Store implements Bm25IndexStore {
         addField(properties, "episodeId", "long", null);
         addField(properties, "episodeNo", "integer", null);
         addField(properties, "episodeTitle", "keyword", null);
+        addField(properties, "pricePoints", "integer", null);
+        addField(properties, "startMs", "long", null);
+        addField(properties, "endMs", "long", null);
+        addTextField(properties, "transcriptTokens");
         addTextField(properties, "titleTokens");
         addTextField(properties, "subtitleTokens");
         addTextField(properties, "descriptionTokens");
@@ -462,6 +554,24 @@ public class ElasticsearchBm25Store implements Bm25IndexStore {
     }
 
     /**
+     * 把字幕 Document 转换为 ES source，正文和预分词字段一次生成。
+     */
+    private String transcriptSourceJson(Document document) {
+        ObjectNode source = jsonMapper.createObjectNode();
+        Map<String, Object> metadata = document.getMetadata();
+        // 1. 复制 metadata，保留 docType、dramaId、episodeNo、startMs/endMs 和字幕正文
+        for (Map.Entry<String, Object> entry : metadata.entrySet()) {
+            source.set(entry.getKey(), jsonMapper.valueToTree(entry.getValue()));
+        }
+        // 2. 正文使用 jieba 预分词，时间轴参与检索文本
+        String transcript = stringValue(metadata.get(RagMetadata.TRANSCRIPT));
+        source.put("content", document.getText());
+        source.put("transcriptTokens", tokenizer.joinForIndex(transcript));
+        source.put("searchText", tokenizer.joinForIndex(document.getText()));
+        return jsonMapper.writeValueAsString(source);
+    }
+
+    /**
      * 构造多字段 BM25 查询，支持附加过滤条件。
      */
     private String searchDsl(String tokens, int topK, List<ObjectNode> filters) {
@@ -479,6 +589,7 @@ public class ElasticsearchBm25Store implements Bm25IndexStore {
         addMatch(should, "episodeTokens", tokens, 1.0);
         addMatch(should, "episodeTitleTokens", tokens, 3.0);
         addMatch(should, "summaryTokens", tokens, 2.0);
+        addMatch(should, "transcriptTokens", tokens, 3.0);
         addMatch(should, "searchText", tokens, 0.5);
         bool.put("minimum_should_match", 1);
 
@@ -506,6 +617,15 @@ public class ElasticsearchBm25Store implements Bm25IndexStore {
     private ObjectNode rangeBefore(String field, int before) {
         ObjectNode filter = jsonMapper.createObjectNode();
         filter.putObject("range").putObject(field).put("lt", before);
+        return filter;
+    }
+
+    /**
+     * 构造小于等于指定值的范围过滤条件。
+     */
+    private ObjectNode rangeAtMost(String field, int value) {
+        ObjectNode filter = jsonMapper.createObjectNode();
+        filter.putObject("range").putObject(field).put("lte", value);
         return filter;
     }
 
@@ -583,6 +703,10 @@ public class ElasticsearchBm25Store implements Bm25IndexStore {
         metadata.put(RagMetadata.EPISODE_NO, source.path(RagMetadata.EPISODE_NO).asInt());
         metadata.put(RagMetadata.EPISODE_TITLE, source.path(RagMetadata.EPISODE_TITLE).asString(""));
         metadata.put(RagMetadata.SUMMARY, source.path(RagMetadata.SUMMARY).asString(""));
+        metadata.put(RagMetadata.PRICE_POINTS, source.path(RagMetadata.PRICE_POINTS).asInt(0));
+        metadata.put(RagMetadata.START_MS, source.path(RagMetadata.START_MS).asInt(0));
+        metadata.put(RagMetadata.END_MS, source.path(RagMetadata.END_MS).asInt(0));
+        metadata.put(RagMetadata.TRANSCRIPT, source.path(RagMetadata.TRANSCRIPT).asString(""));
         metadata.put(RagMetadata.TITLE, source.path(RagMetadata.TITLE).asString(""));
         metadata.put(RagMetadata.SUBTITLE, source.path(RagMetadata.SUBTITLE).asString(""));
         metadata.put(RagMetadata.COVER_URL, source.path(RagMetadata.COVER_URL).asString(""));
