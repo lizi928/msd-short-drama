@@ -660,13 +660,18 @@ async function sendText(text, options = {}) {
                 onEvent: onStreamEvent
             })
         } catch (cause) {
+            // 1. 主动取消（停止、切集、切换会话）直接忽略；超时保留部分回答并提示重试
             if (requestToken !== requestSequence || stopRequested
-                || cause?.code === -2 || cause?.name === 'AbortError') {
+                || cause?.name === 'AbortError'
+                || (cause?.code === -2 && !cause?.timedOut)) {
                 return
+            }
+            if (cause?.timedOut) {
+                streamError = { code: 'timeout', message: '' }
             }
             if (!assistant && !streamingDelta.value) {
                 streamFailed = true
-            } else {
+            } else if (!cause?.timedOut) {
                 throw cause
             }
         }
@@ -719,8 +724,8 @@ async function sendText(text, options = {}) {
     } catch (cause) {
         if (requestToken !== requestSequence
             || stopRequested
-            || cause?.code === -2
-            || cause?.name === 'AbortError') {
+            || cause?.name === 'AbortError'
+            || (cause?.code === -2 && !cause?.timedOut)) {
             return
         }
         lastFailedText = content

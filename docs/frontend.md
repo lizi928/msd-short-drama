@@ -71,6 +71,7 @@ npm run build    # 输出 frontend/dist
 
 - 所有业务接口统一返回 `Result`，`api/http.js` 负责解包、附加 Bearer Token 和抛出 `ApiError(code, message, status)`。
 - `api/http.js` 的 `streamRequest()` 用 `fetch + ReadableStream` 解析 SSE，支持 `Authorization`、`AbortController` 和总超时；非 `text/event-stream` 响应抛 `ApiError(-3)`，调用方回退普通 JSON。
+- 内部超时和调用方主动取消共用 `code=-2`，但 `ApiError.timedOut` 会区分两者；AI 找剧和伴看只在主动取消时静默退出，超时会回退 JSON 或展示重试提示，避免页面停留在空白状态。
 - Token 与用户资料存放在 `localStorage` 的 `msd.auth`，不使用 Cookie。
 - 分页统一 `pageNo/pageSize`，页面采用“加载更多”，不做页码跳转。
 - 列表数据由后端批量补齐；标题或昵称为空时前端降级显示，不阻断列表。

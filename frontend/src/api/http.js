@@ -7,12 +7,14 @@ const AUTH_PREFIX = '/api/user/auth/'
  * status 是 HTTP 状态码，code 是后端业务码，便于页面区分 401/403/404/409。
  */
 export class ApiError extends Error {
-    constructor(code, message, status = 0, payload = null) {
+    constructor(code, message, status = 0, payload = null, timedOut = false) {
         super(message)
         this.name = 'ApiError'
         this.code = code
         this.status = status
         this.payload = payload
+        // 区分内部超时和调用方主动取消：两者共用 code -2，但只有超时需要展示错误
+        this.timedOut = timedOut
     }
 }
 
@@ -114,7 +116,9 @@ export async function request(path, options = {}) {
             throw new ApiError(
                 -2,
                 timedOut ? '请求超时，请稍后重试' : '请求已取消',
-                0
+                0,
+                null,
+                timedOut
             )
         }
         throw new ApiError(-1, '网络异常，请确认网关和服务已启动')
@@ -238,7 +242,8 @@ export async function streamRequest(path, options = {}) {
     } catch (cause) {
         cleanup()
         if (cause?.name === 'AbortError') {
-            throw new ApiError(-2, timedOut ? '请求超时，请稍后重试' : '请求已取消', 0)
+            throw new ApiError(-2, timedOut ? '请求超时，请稍后重试' : '请求已取消',
+                0, null, timedOut)
         }
         throw new ApiError(-1, '网络异常，请确认网关和服务已启动')
     }
@@ -292,7 +297,8 @@ export async function streamRequest(path, options = {}) {
             }
         } catch (cause) {
             if (cause?.name === 'AbortError') {
-                throw new ApiError(-2, timedOut ? '请求超时，请稍后重试' : '请求已取消', 0)
+                throw new ApiError(-2, timedOut ? '请求超时，请稍后重试' : '请求已取消',
+                    0, null, timedOut)
             }
             throw new ApiError(-1, '流式连接中断，请重试')
         } finally {

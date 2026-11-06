@@ -222,10 +222,14 @@ async function runAiSearch() {
                 onEvent: onStreamEvent
             })
         } catch (cause) {
-            if (requestId !== aiRequestId || cause?.code === -2 || cause?.name === 'AbortError') {
+            // 1. 主动取消（切换模式/离开页面/发起新请求）直接忽略；超时不能被当成取消
+            if (requestId !== aiRequestId || cause?.name === 'AbortError'
+                || (cause?.code === -2 && !cause?.timedOut)) {
                 return
             }
-            if (!streamed) {
+            if (cause?.timedOut) {
+                streamError = { code: 'timeout', message: '' }
+            } else if (!streamed) {
                 streamError = { code: 'unavailable', message: '' }
             } else {
                 throw cause
@@ -249,7 +253,8 @@ async function runAiSearch() {
             draft.degradedFlags = [...new Set([...draft.degradedFlags, 'timeout'])]
         }
     } catch (cause) {
-        if (requestId !== aiRequestId || cause?.code === -2 || cause?.name === 'AbortError') {
+        if (requestId !== aiRequestId || cause?.name === 'AbortError'
+            || (cause?.code === -2 && !cause?.timedOut)) {
             return
         }
         aiResult.value = null
